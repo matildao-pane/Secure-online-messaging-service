@@ -9,14 +9,86 @@
 #include <limits.h>
 #include <string.h> 
 using namespace std;
+
+void handleErrors(void)
+{
+  ERR_print_errors_fp(stderr);
+  abort();
+}
 //Asymmetric encription and decription. for initial exange and negotiation(?)
 /*
 envelope_seal(){}
 envelope_open(){}
-// Diffie-Hellman for session key
-dh_generate_params(){} //p,g,key couple
-dh_derive_shared_secret(){}
 */
+// Diffie-Hellman for session key
+EVP_PKEY* dh_generate_key(string my_pubkey_file_name){
+
+/*GENERATING MY EPHEMERAL KEY*/
+/* Use built-in parameters */
+	printf("Start: loading standard DH parameters\n");
+	EVP_PKEY *params=NULL;
+
+	printf("\n");
+	printf("Generating ephemeral DH KeyPair\n");
+/* Create context for the key generation */
+	EVP_PKEY_CTX *DHctx;
+	if(!(DHctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL))) handleErrors();
+	if(1!=(EVP_PKEY_paramgen_init(DHctx))) handleErrors();
+	if(1!=(EVP_PKEY_CTX_set_ec_paramgen_curve_nid(DHctx, NID_X9_62_prime256v1))) handleErrors();
+	if(1!=(EVP_PKEY_paramgen(DHctx, &params))) handleErrors();
+	EVP_PKEY_CTX_free(DHctx);
+
+
+/* Generate a new key */
+	if(!(DHctx = EVP_PKEY_CTX_new(params, NULL))) handleErrors();
+
+	EVP_PKEY *my_dhkey = NULL;
+	if(1 != EVP_PKEY_keygen_init(DHctx)) handleErrors();
+	if(1 != EVP_PKEY_keygen(DHctx, &my_dhkey)) handleErrors();
+	
+/* Write into a file*/
+	
+	FILE* p1w = fopen(my_pubkey_file_name.c_str(), "w");
+	if(!p1w){ cerr << "Error: cannot open file '"<< my_pubkey_file_name << "' (missing?)\n"; exit(1); }
+	PEM_write_PUBKEY(p1w, my_dhkey);
+	fclose(p1w);
+	
+	return my_dhkey;
+
+} 
+
+EVP_PKEY* dh_get_pubkey(string pubkey_file_name){
+	FILE* p2r = fopen(pubkey_file_name.c_str(), "r");
+	if(!p2r){ cerr << "Error: cannot open file '"<< pubkey_file_name <<"' (missing?)\n"; exit(1); }
+	EVP_PKEY* pubkey = PEM_read_PUBKEY(p2r, NULL, NULL, NULL);
+	fclose(p2r);
+	if(!pubkey){ cerr << "Error: PEM_read_PUBKEY returned NULL\n"; exit(1); }
+	
+	return pubkey;
+}
+
+
+int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_key, unsigned char *shared_secret){
+	size_t shared_secretlen;
+	EVP_PKEY_CTX *derive_ctx;
+	derive_ctx = EVP_PKEY_CTX_new(my_prv_key, NULL);
+	if (!derive_ctx) handleErrors();
+	if (EVP_PKEY_derive_init(derive_ctx) <= 0) handleErrors();
+	/*Setting the peer with its pubkey*/
+	if (EVP_PKEY_derive_set_peer(derive_ctx, peer_pub_key) <= 0) handleErrors();
+	/* Determine buffer length, by performing a derivation but writing the result nowhere */
+	EVP_PKEY_derive(derive_ctx, NULL, &shared_secretlen);
+	shared_secret = (unsigned char*)(malloc(int(shared_secretlen)));	
+	if (!shared_secret) handleErrors();
+	/*Perform again the derivation and store it in shared_secret buffer*/
+	if (EVP_PKEY_derive(derive_ctx, shared_secret, &shared_secretlen) <= 0) handleErrors();
+	EVP_PKEY_free(peer_pub_key);
+	EVP_PKEY_free(my_prv_key);
+	EVP_PKEY_CTX_free(derive_ctx);
+	
+	return (int)shared_secretlen;
+}
+
 //simmetric encription and decription using generated key
 int cbc_encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *ciphertext){
 	int ret;
@@ -86,4 +158,5 @@ int cbc_decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *ke
 
 	return plaintext_len;
 }
+
 
