@@ -8,6 +8,14 @@
 //authentication, login
 client_auth(){}
 
+void  print_users_list(){
+	//richiesta online
+	//receive
+
+
+	return 0;
+}
+
 int main(){
 //send richiesta login
 //attendo certificato
@@ -21,7 +29,8 @@ int main(){
 //unisco parti e genero dh_key_cs 
 
 //SPLIT: divento disponible anche agli altri
-//receive users list dal server
+//receive users list dal server   
+
 //[0]wait (ciclo) aspetto o [1] o [2]
 //[1] chiedo di parlare con qualcuno
 //[2]ricevi richiesta di contatto dal client
