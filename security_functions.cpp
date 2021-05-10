@@ -89,7 +89,25 @@ int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_key, unsign
 	return (int)shared_secretlen;
 }
 
-//simmetric encription and decription using generated key
+
+unsigned int dh_generate_session_key(unsigned char *shared_secret,int shared_secretlen, unsigned char *sessionkey){
+	unsigned int sessionkey_len;
+	EVP_MD_CTX* hctx;
+	/* Buffer allocation for the digest */
+	sessionkey = (unsigned char*) malloc(EVP_MD_size(EVP_sha256()));
+	
+	/* Context allocation */
+	hctx= EVP_MD_CTX_new();
+	/* Hashing (initialization + single update + finalization */
+	EVP_DigestInit(hctx, EVP_sha256());
+	EVP_DigestUpdate(hctx, shared_secretkey, shared_secretlen);
+	EVP_DigestFinal(hctx, sessionkey, &sessionkey_len);
+	/* Context deallocation */
+	EVP_MD_CTX_free(hctx);
+	return sessionkey_len;
+}
+
+//simmetric encryption and decription using generated key
 int cbc_encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *ciphertext){
 	int ret;
 	int ciphertext_len;
@@ -142,7 +160,6 @@ int cbc_decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *ke
 	if(ret!=1){cerr<<"DecryptInit Error";exit(1);}
 	plaintext_len=0;
 	int update_len=0;
-	//for blocco
 	ret=EVP_DecryptUpdate(ctx, plaintext, &update_len, ciphertext, ciphertext_len);
 	if(ret!=1){cerr<<"DecryptUpdate Error";exit(1);}
 	plaintext_len += update_len;
