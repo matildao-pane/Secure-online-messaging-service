@@ -91,16 +91,22 @@ unsigned int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_ke
 
 unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int shared_secretlen, unsigned char *sessionkey){
 	unsigned int sessionkey_len;
+	int ret
 	EVP_MD_CTX* hctx;
+	
 	/* Buffer allocation for the digest */
 	sessionkey = (unsigned char*) malloc(EVP_MD_size(EVP_sha256()));
 	
 	/* Context allocation */
 	hctx= EVP_MD_CTX_new();
+	if(!hctx) {cerr<<"dh_generate_session_key: EVP_MD_CTX_new Error";exit(1);}
 	/* Hashing (initialization + single update + finalization */
-	EVP_DigestInit(hctx, EVP_sha256());
-	EVP_DigestUpdate(hctx, shared_secretkey, shared_secretlen);
-	EVP_DigestFinal(hctx, sessionkey, &sessionkey_len);
+	ret=EVP_DigestInit(hctx, EVP_sha256());
+	if(ret!=1){cerr<<"dh_generate_session_key: EVP_DigestInit Error";;exit(1);}
+	ret=EVP_DigestUpdate(hctx, shared_secretkey, shared_secretlen);
+	if(ret!=1){cerr<<"dh_generate_session_key: EVP_DigestUpdate Error";;exit(1);}
+	ret=EVP_DigestFinal(hctx, sessionkey, &sessionkey_len);
+	if(ret!=1){cerr<<"dh_generate_session_key: EVP_DigestFinal Error";;exit(1);}
 	/* Context deallocation */
 	EVP_MD_CTX_free(hctx);
 	return sessionkey_len;
