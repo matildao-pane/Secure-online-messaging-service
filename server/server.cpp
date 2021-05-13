@@ -13,55 +13,62 @@ we have:
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-void error(const char *msg)
-{
+void error(const char *msg){
     perror(msg);
     exit(1);
 }
 
 
 //authentication 
-server_auth(){}
+int server_sendCertificate(int socket){
+	X509* serverCert;
+	FILE* file = fopen("ChatServer_cert.pem", "r");
+	if(!file) { cerr<<"server_getCertificate: File Open Error";exit(1);}
+	serverCert = PEM_read_X509(file, NULL, NULL, NULL);
+	if(!serverCert) { cerr<<"server_getCertificate: PEM_read_X509 error";exit(1); }
+	fclose(file);
+	if(!BIO* bio = BIO_new(BIO_s_mem())) { cerr<<"server_getCertificate: Failed to allocate BIO_s_mem";exit(1); }
+	if(!PEM_write_bio_X509(bio, serverCert)) { cerr<<"server_getCertificate: PEM_write_bio_X509 error";exit(1); }
+	char* buffer=NULL;
+	long size = BIO_get_mem_data(bio, &buffer);
+	int res= send(socket,buffer,bufsize,0)
+	BIO_free(bio);
+	return res;
+}
 
 
-int main(int argc, char *argv[])
-{
-	/*socket */
-     int sockfd, newsockfd, portno;
-     socklen_t clilen;
-	 pid_t pid;
-     char buffer[256];
-     struct sockaddr_in serv_addr, cli_addr;
-     int n;
-     if (argc < 2) {
-         fprintf(stderr,"ERROR, no port provided\n");
-         exit(1);
-     }
-     sockfd =  socket(AF_INET, SOCK_STREAM, 0);
-     if (sockfd < 0) 
-        error("ERROR opening socket");
-     bzero((char *) &serv_addr, sizeof(serv_addr));
-     portno = atoi(argv[1]);
-     serv_addr.sin_family = AF_INET;  
-     serv_addr.sin_addr.s_addr = INADDR_ANY;  
-     serv_addr.sin_port = htons(portno);
-     if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) 
-              error("ERROR on binding");
-     listen(sockfd,10); 
-     clilen = sizeof(cli_addr);
-	 
-	 while(1) { //wait  (processo sempre in attesa, aspetta richieste qualsiasi)
-		
+int main(int argc, char *argv[]){
+	int sockfd, newsockfd, portno;
+	socklen_t clilen;
+	pid_t pid;
+	char buffer[256];
+	struct sockaddr_in serv_addr, cli_addr;
+	int n;
+	if (argc < 2) {
+		fprintf(stderr,"ERROR, no port provided\n");
+		exit(1);
+	}
+	sockfd =  socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd < 0) error("ERROR opening socket");
+     	bzero((char *) &serv_addr, sizeof(serv_addr));
+    	portno = atoi(argv[1]);
+     	serv_addr.sin_family = AF_INET;  
+	serv_addr.sin_addr.s_addr = INADDR_ANY;  
+	serv_addr.sin_port = htons(portno);
+	if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) error("ERROR on binding");
+	listen(sockfd,10); 
+	clilen = sizeof(cli_addr);
+	while(1){ //wait  (processo sempre in attesa, aspetta richieste qualsiasi)
 		newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen;);
 		if (newsockfd < 0) error("ERROR on accept");
 		pid = fork(); //creo nuovo processo in attesa di altri client. fork
-		if (pid == -1) {
-		 /* Gestione errore */
-		};
+		if (pid == -1) error("ERROR on fork");
 		if (pid == 0) {
 		 // Sono nel processo figlio
-		close(sockfd);
-		 /* Gestione richiesta (send, recv, ...) */
+			close(sockfd);
+		 	int res;
+			res=server_sendCertificate();
+			if(res<0)error("server_sendCertificate: SEND error");
 	
 	
 	

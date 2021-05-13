@@ -15,13 +15,20 @@ void handleErrors(void)
   ERR_print_errors_fp(stderr);
   abort();
 }
+
+//Digital Signature Sign/Verify
+/*
+digsign_sign(){}
+digsign_verify(){}
+*/
+
 //Asymmetric encription and decription. for initial exange and negotiation(?)
 /*
 envelope_seal(){}
 envelope_open(){}
 */
 // Diffie-Hellman for session key
-EVP_PKEY* dh_generate_key(string my_pubkey_file_name){
+EVP_PKEY* dh_generate_key(char* buffer,unsigned int &buffersize){
 
 /*GENERATING MY EPHEMERAL KEY*/
 /* Use built-in parameters */
@@ -47,28 +54,20 @@ EVP_PKEY* dh_generate_key(string my_pubkey_file_name){
 	if(1 != EVP_PKEY_keygen(DHctx, &my_dhkey)) handleErrors();
 	
 /* Write into a file*/
-	
-	FILE* p1w = fopen(my_pubkey_file_name.c_str(), "w");
-	if(!p1w){ cerr << "Error: cannot open file '"<< my_pubkey_file_name << "' (missing?)\n"; exit(1); }
-	PEM_write_PUBKEY(p1w, my_dhkey);
-	fclose(p1w);
-	
+	if(!BIO* bio = BIO_new(BIO_s_mem())) { cerr<<"dh_generate_key: Failed to allocate BIO_s_mem";exit(1); }
+	if(!PEM_write_bio_PUBKEY(bio,  my_dhkey)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
+	char* buf=NULL;
+	long size = BIO_get_mem_data(bio, &buffer);
+	if (size<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
+	memcpy(buffer+buffersize,buf,size);
+	buffersize+=size;
+	BIO_free(bio);
 	return my_dhkey;
 
 } 
 
-EVP_PKEY* dh_get_pubkey(string pubkey_file_name){
-	FILE* p2r = fopen(pubkey_file_name.c_str(), "r");
-	if(!p2r){ cerr << "Error: cannot open file '"<< pubkey_file_name <<"' (missing?)\n"; exit(1); }
-	EVP_PKEY* pubkey = PEM_read_PUBKEY(p2r, NULL, NULL, NULL);
-	fclose(p2r);
-	if(!pubkey){ cerr << "Error: PEM_read_PUBKEY returned NULL\n"; exit(1); }
-	
-	return pubkey;
-}
 
-
-int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_key, unsigned char *shared_secret){
+unsigned int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_key, unsigned char *shared_secret){
 	size_t shared_secretlen;
 	EVP_PKEY_CTX *derive_ctx;
 	derive_ctx = EVP_PKEY_CTX_new(my_prv_key, NULL);
@@ -86,11 +85,11 @@ int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_key, unsign
 	EVP_PKEY_free(my_prv_key);
 	EVP_PKEY_CTX_free(derive_ctx);
 	
-	return (int)shared_secretlen;
+	return (unsigned int)shared_secretlen;
 }
 
 
-unsigned int dh_generate_session_key(unsigned char *shared_secret,int shared_secretlen, unsigned char *sessionkey){
+unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int shared_secretlen, unsigned char *sessionkey){
 	unsigned int sessionkey_len;
 	EVP_MD_CTX* hctx;
 	/* Buffer allocation for the digest */
@@ -107,13 +106,18 @@ unsigned int dh_generate_session_key(unsigned char *shared_secret,int shared_sec
 	return sessionkey_len;
 }
 
+
+
+
+//DA CAMBIARE CON AUTHENCRYPT
+
 //simmetric encryption and decription using generated key
 int cbc_encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *ciphertext){
 	int ret;
-	int ciphertext_len;
+	unsigned int ciphertext_len;
 	const EVP_CIPHER* cipher = EVP_aes_128_cbc();
-	int iv_len = EVP_CIPHER_iv_length(cipher);
-	int block_size = EVP_CIPHER_block_size(cipher);
+	unsigned int iv_len = EVP_CIPHER_iv_length(cipher);
+	unsigned int block_size = EVP_CIPHER_block_size(cipher);
 	
 	unsigned char *iv = (unsigned char *)malloc(iv_len);
 	RAND_poll();
