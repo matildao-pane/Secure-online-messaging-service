@@ -11,10 +11,13 @@
 using namespace std;
 
 //DigitalEnvelope parameters
+
 const EVP_CIPHER* DE_cipher = EVP_aes_128_cbc();
 int DE_iv_len = EVP_CIPHER_iv_length(DE_cipher);
 int DE_block_size = EVP_CIPHER_block_size(DE_cipher);
 
+//Message Digest for digital signature and hash
+const EVP_MD* md = EVP_sha256();
 
 void handleErrors(void)
 {
@@ -23,10 +26,80 @@ void handleErrors(void)
 }
 
 //Digital Signature Sign/Verify
-/*
-digsign_sign(){}
-digsign_verify(){}
-*/
+unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned int clear_size,   unsigned char* signed_buffer  ){
+	int ret; // used for return values
+
+   // create the signature context:
+   EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
+   if(!md_ctx){ cerr << "digsign_sign: EVP_MD_CTX_new returned NULL\n"; exit(1); }
+
+   // allocate buffer for signature:
+   unsigned char*sgnt_buf = (unsigned char*)malloc(EVP_PKEY_size(prvkey));
+   if(!sgnt_buf) { cerr << "digsign_sign: malloc returned NULL (signature too big?)\n"; exit(1); }
+
+   // sign the plaintext:
+   // (perform a single update on the whole plaintext, 
+   // assuming that the plaintext is not huge)
+   ret = EVP_SignInit(md_ctx, md);
+   if(ret == 0){ cerr << "digsign_sign: EVP_SignInit returned " << ret << "\n"; exit(1); }
+   ret = EVP_SignUpdate(md_ctx, clear_buf, clear_size);
+   if(ret == 0){ cerr << "digsign_sign: EVP_SignUpdate returned " << ret << "\n"; exit(1); }
+   unsigned int sgnt_size;
+   ret = EVP_SignFinal(md_ctx, sgnt_buf, &sgnt_size, prvkey);
+   if(ret == 0){ cerr << "digsign_sign: EVP_SignFinal returned " << ret << "\n"; exit(1); }
+   
+	unsigned int signed_buffer_size = sizeof(unsigned int)+sgnt_size+clear_size;
+	signed_buffer = (unsigned char*)malloc(signed_buffer_size);
+	if(!signed_buffer) { cerr << "digsign_sign: malloc returned NULL (signature too big?)\n"; exit(1); }
+	memcpy(signed_buffer, sgnt_size, sizeof(unsigned int)); 
+	memcpy(signed_buffer+sizeof(unsigned int), sgnt_buf, sgnt_size );
+	memcpy(signed_buffer+sizeof(unsigned int)+sgnt_size,clear_buf, clear_size);
+	
+   // delete the digest from memory:
+   EVP_MD_CTX_free(md_ctx);
+   free(sgnt_buf);
+
+   return signed_buffer_size;
+}
+
+
+unsigned int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned int input_size, unsigned char*  clear_buf){
+
+	unsigned int sgnt_size;
+	memcpy(sgnt_size, input_buffer,sizeof(unsigned int));
+	if(input_size < sgnt_size + sizeof(unsigned int)) { cerr << "digsign_verify: signed buffer with wrong format\n"; exit(1); }
+	unsigned char* sgnt_buf=(unsigned char*)malloc(sgnt_size);	
+	if(!sgnt_buf) { cerr << "digsign_verify: malloc returned NULL (signature too big?)\n"; exit(1); }	
+	memcpy(sgnt_buf, input_buffer+sizeof(unsigned int), sgnt_size);
+	unsigned int clear_size= input_size-sgnt_size-sizeof(unsigned int);
+	if(clear_size==0){ cerr << " digsign_verify: empty message \n"; exit(1); }
+	clear_buf=(unsigned char*) malloc(clear_size);
+	memcpy(clear_buf, input_buffer+sizeof(unsigned int)+sgnt_size, clear_size);
+	
+	// create the signature context:
+   EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
+   if(!md_ctx){ cerr << "Error: EVP_MD_CTX_new returned NULL\n"; exit(1); }
+
+   // verify the plaintext:
+   // (perform a single update on the whole plaintext, 
+   // assuming that the plaintext is not huge)
+   ret = EVP_VerifyInit(md_ctx, md);
+   if(ret == 0){ cerr << "Error: EVP_VerifyInit returned " << ret << "\n"; exit(1); }
+   ret = EVP_VerifyUpdate(md_ctx, clear_buf, clear_size);  
+   if(ret == 0){ cerr << "Error: EVP_VerifyUpdate returned " << ret << "\n"; exit(1); }
+   ret = EVP_VerifyFinal(md_ctx, sgnt_buf, sgnt_size, peer_pubkey);
+   if(ret == -1){ // it is 0 if invalid signature, -1 if some other error, 1 if success.
+      cerr << "Error: EVP_VerifyFinal returned " << ret << " (invalid signature?)\n";  exit(1);
+   }else if(ret == 0){      cerr << "Error: Invalid signature!\n"; exit(1);
+   }
+
+   // deallocate data:
+   EVP_MD_CTX_free(md_ctx);
+   free(sgnt_buf);
+
+   return clear_size;
+}
+
 
 //Asymmetric encription and decription. for initial exange and negotiation(?)
 unsigned int envelope_seal(EVP_PKEY* peer_pubkey, unsigned char* cleartext, unsigned int clear_size, unsigned char* outputbuffer){
@@ -60,12 +133,10 @@ unsigned int envelope_seal(EVP_PKEY* peer_pubkey, unsigned char* cleartext, unsi
 	ret=EVP_SealUpdate(ctx, outputbuffer+total_len, &update_len, cleartext, clear_size);
 	if(ret!=1){cerr<<"envelope_seal: SealUpdate Error";exit(1);}
 	total_len += update_len;
-	//Encrypt Final. Finalize the encryption and adds the padding
 	ret=EVP_SealFinal(ctx, outputbuffer + total_len, &update_len);
 	if(ret!=1){cerr<<"envelope_seal: SealFinal Error";exit(1);}
 	total_len += update_len;
 	
-	// MUST ALWAYS BE CALLED!!!!!!!!!!
 	EVP_CIPHER_CTX_free(ctx);
 // INIZIO PULIZIA PARAMETRI PASSATI
 #pragma optimize("",off)
@@ -85,7 +156,6 @@ unsigned int envelope_open(EVP_PKEY* prvkey, unsigned char* inputbuffer, unsigne
 	if(encrypted_key_len > INT_MAX - DE_iv_len) { cerr << "envelope_open: integer overflow (encrypted key too big?)"; exit(1); }
 	if(input_size < encrypted_key_len + DE_iv_len) { cerr << "Error: encrypted buffer with wrong format\n"; exit(1); }
 	unsigned int cipher_size= input_size - DE_iv_len - encrypted_key_len;
-	if(cipher_size>UINT_MAX-DE_block_size) {cerr<<"envelope_open: cipher_size Integer Overflow Error";exit(1);}
 
 	unsigned char *iv = (unsigned char *)malloc(DE_iv_len);
 	if(!iv) {cerr<<"envelope_open: iv Malloc Error";exit(1);}
@@ -102,16 +172,13 @@ unsigned int envelope_open(EVP_PKEY* prvkey, unsigned char* inputbuffer, unsigne
 	EVP_CIPHER_CTX *ctx;
 	ctx = EVP_CIPHER_CTX_new();
 	if(!ctx) {cerr<<"envelope_open: EVP_CIPHER_CTX_new Error";exit(1);}
-	// Encrypt init
 	ret=EVP_OpenInit(ctx, DE_cipher, encrypted_key, encrypted_key_len, iv, prvkey);
 	if(ret!=1){cerr<<"envelope_open: OpenInit Error";exit(1);}
 	unsigned int total_len=0;
 	int update_len=0;
-	// Encrypt Update: one call is enough because our message is very short.
 	ret=EVP_OpenUpdate(ctx, cleartext, &update_len, ciphertext, cipher_size);
 	if(ret!=1){cerr<<"envelope_open: OpenUpdate Error";exit(1);}
 	total_len += update_len;
-	//Encrypt Final. Finalize the encryption and adds the padding
 	ret=EVP_OpenFinal(ctx, cleartext + total_len, &update_len);
 	if(ret!=1){cerr<<"envelope_open: OpenFinal Error";exit(1);}
 	total_len += update_len;
@@ -203,13 +270,13 @@ unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int s
 	EVP_MD_CTX* hctx;
 	
 	/* Buffer allocation for the digest */
-	sessionkey = (unsigned char*) malloc(EVP_MD_size(EVP_sha256()));
+	sessionkey = (unsigned char*) malloc(EVP_MD_size(md));
 	
 	/* Context allocation */
 	hctx= EVP_MD_CTX_new();
 	if(!hctx) {cerr<<"dh_generate_session_key: EVP_MD_CTX_new Error";exit(1);}
 	/* Hashing (initialization + single update + finalization */
-	ret=EVP_DigestInit(hctx, EVP_sha256());
+	ret=EVP_DigestInit(hctx, md);
 	if(ret!=1){cerr<<"dh_generate_session_key: EVP_DigestInit Error";;exit(1);}
 	ret=EVP_DigestUpdate(hctx, shared_secret, shared_secretlen);
 	if(ret!=1){cerr<<"dh_generate_session_key: EVP_DigestUpdate Error";;exit(1);}
@@ -293,5 +360,3 @@ int cbc_decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *ke
 
 	return plaintext_len;
 }
-
-
