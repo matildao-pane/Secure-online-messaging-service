@@ -15,7 +15,11 @@ using namespace std;
 const EVP_CIPHER* DE_cipher = EVP_aes_128_cbc();
 int DE_iv_len = EVP_CIPHER_iv_length(DE_cipher);
 int DE_block_size = EVP_CIPHER_block_size(DE_cipher);
-
+//Authencrypt parameters
+const EVP_CIPHER* AE_cipher = EVP_aes_128_gcm();
+int AE_iv_len =  EVP_CIPHER_iv_length(AE_cipher);
+int AE_block_size = EVP_CIPHER_block_size(AE_cipher);
+const int AE_tag_len = 16;
 //Message Digest for digital signature and hash
 const EVP_MD* md = EVP_sha256();
 
@@ -51,7 +55,7 @@ unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned i
 	unsigned int signed_buffer_size = sizeof(unsigned int)+sgnt_size+clear_size;
 	signed_buffer = (unsigned char*)malloc(signed_buffer_size);
 	if(!signed_buffer) { cerr << "digsign_sign: malloc returned NULL (signature too big?)\n"; exit(1); }
-	memcpy(signed_buffer, sgnt_size, sizeof(unsigned int)); 
+	memcpy(signed_buffer, (char*) &sgnt_size, sizeof(unsigned int)); 
 	memcpy(signed_buffer+sizeof(unsigned int), sgnt_buf, sgnt_size );
 	memcpy(signed_buffer+sizeof(unsigned int)+sgnt_size,clear_buf, clear_size);
 	
@@ -64,9 +68,9 @@ unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned i
 
 
 unsigned int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned int input_size, unsigned char*  clear_buf){
-
+	int ret;
 	unsigned int sgnt_size;
-	memcpy(sgnt_size, input_buffer,sizeof(unsigned int));
+	memcpy((char*) &sgnt_size, input_buffer,sizeof(unsigned int));
 	if(input_size < sgnt_size + sizeof(unsigned int)) { cerr << "digsign_verify: signed buffer with wrong format\n"; exit(1); }
 	unsigned char* sgnt_buf=(unsigned char*)malloc(sgnt_size);	
 	if(!sgnt_buf) { cerr << "digsign_verify: malloc returned NULL (signature too big?)\n"; exit(1); }	
@@ -291,6 +295,110 @@ unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int s
 
 
 //DA CAMBIARE CON AUTHENCRYPT
+unsigned int auth_encrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, unsigned char *output_buffer)
+{
+	if(input_len > UINT_MAX-AE_block_size) {cerr<<"Auth encrypt: Integer Overflow Error";exit(1);}
+	int ret;
+	unsigned char *iv = (unsigned char *)malloc(AE_iv_len);
+	if(!iv) {cerr<<"auth encrypt: iv Malloc Error";exit(1);}
+	RAND_poll();
+	ret = RAND_bytes((unsigned char*)&iv[0],AE_iv_len);
+	if(ret!=1){cerr<<"RAND_bytes Error";exit(1);}
+	    EVP_CIPHER_CTX *ctx;
+	    int len=0;
+	    int ciphertext_len=0;
+	    unsigned char* ciphertext = (unsigned char *)malloc(input_len + AE_block_size);
+	    if(!ciphertext) {cerr<<"auth encrypt: ciphertext Malloc Error";exit(1);}
+	    unsigned char* tag = (unsigned char *)malloc(AE_tag_len);
+	    if(!tag) {cerr<<"auth encrypt: tag Malloc Error";exit(1);}
+	    // Create and initialise the context
+	    if(!(ctx = EVP_CIPHER_CTX_new()))
+		handleErrors();
+	    // Initialise the encryption operation.
+	    if(1 != EVP_EncryptInit(ctx, AE_cipher, shared_key, iv))
+		handleErrors();
+
+	    //Provide any AAD data. This can be called zero or more times as required
+	    if(1 != EVP_EncryptUpdate(ctx, NULL, &len, iv, AE_iv_len))
+		handleErrors();
+
+	    if(1 != EVP_EncryptUpdate(ctx, ciphertext, &len, input_buffer, input_len))
+		handleErrors();
+	    ciphertext_len = len;
+		//Finalize Encryption
+	    if(1 != EVP_EncryptFinal(ctx, ciphertext + ciphertext_len, &len))
+		handleErrors();
+	    ciphertext_len += len;
+	    /* Get the tag */
+	    if(1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, AE_tag_len, tag))
+		handleErrors();
+	unsigned int output_len = AE_tag_len + ciphertext_len + AE_iv_len;
+	output_buffer =(unsigned char *) malloc(output_len);
+	if(!output_buffer) {cerr<<"auth encrypt: output buffer Malloc Error";exit(1);}
+	memcpy(output_buffer, tag, AE_tag_len);
+	memcpy(output_buffer + AE_tag_len, iv, AE_iv_len);
+	memcpy(output_buffer + AE_iv_len + AE_tag_len, ciphertext, ciphertext_len);
+	/* Clean up */
+	EVP_CIPHER_CTX_free(ctx);
+	free(tag);
+	free(iv);
+	free(ciphertext);
+	return output_len;
+	}
+
+unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, unsigned char *output_buffer)
+{
+	if(input_len <= AE_tag_len + AE_iv_len) { cerr << "Error auth decrypt: encrypted buffer with wrong format\n"; exit(1); }
+    EVP_CIPHER_CTX *ctx;
+    int len;
+    unsigned int ciphertext_len = input_len - AE_iv_len - AE_tag_len;
+    int ret;
+    unsigned int output_len = 0;
+    unsigned char *iv = (unsigned char *)malloc(AE_iv_len);
+	if(!iv) {cerr<<"auth decrypt: iv Malloc Error";exit(1);}
+	unsigned char* ciphertext = (unsigned char *)malloc(ciphertext_len);
+	if(!ciphertext) {cerr<<"auth decrypt: ciphertext Malloc Error";exit(1);}
+	unsigned char* tag = (unsigned char *)malloc(AE_tag_len);
+	if(!tag) {cerr<<"auth decrypt: tag Malloc Error";exit(1);}
+	memcpy(tag, input_buffer, AE_tag_len);
+	memcpy(iv, input_buffer + AE_tag_len, AE_iv_len);
+	memcpy(ciphertext, input_buffer + AE_iv_len + AE_tag_len, ciphertext_len);
+    /* Create and initialise the context */
+    if(!(ctx = EVP_CIPHER_CTX_new()))
+        handleErrors();
+    if(!EVP_DecryptInit(ctx, AE_cipher, shared_key, iv))
+        handleErrors();
+	//Provide any AAD data.
+    if(!EVP_DecryptUpdate(ctx, NULL, &len, iv, AE_iv_len))
+        handleErrors();
+	//Provide the message to be decrypted, and obtain the plaintext output.
+    if(!EVP_DecryptUpdate(ctx, output_buffer, &len, ciphertext, ciphertext_len))
+        handleErrors();
+    output_len = len;
+    /* Set expected tag value. Works in OpenSSL 1.0.1d and later */
+    if(!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, AE_tag_len, tag))
+        handleErrors();
+    /*
+     * Finalise the decryption. A positive return value indicates success,
+     * anything else is a failure - the plaintext is not trustworthy.
+     */
+    ret = EVP_DecryptFinal(ctx, output_buffer + output_len, &len);
+
+    /* Clean up */
+    EVP_CIPHER_CTX_cleanup(ctx);
+	free(tag);
+	free(iv);
+	free(ciphertext);
+    if(ret > 0) {
+        /* Success */
+        output_len += len;
+        return output_len;
+    } else {
+        /* Verify failed */
+        cerr<<"auth decrypt: Verification failed!";
+        return 0;
+    }
+}
 
 //simmetric encryption and decription using generated key
 int cbc_encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *ciphertext){
