@@ -20,7 +20,7 @@ void error(const char *msg){
 
 
 //authentication 
-int server_sendCertificate(int socket){
+long server_getCertificate(unsigned char* buffer){
 	X509* serverCert;
 	FILE* file = fopen("ChatServer_cert.pem", "r");
 	if(!file) { cerr<<"server_getCertificate: File Open Error";exit(1);}
@@ -29,11 +29,44 @@ int server_sendCertificate(int socket){
 	fclose(file);
 	if(!BIO* bio = BIO_new(BIO_s_mem())) { cerr<<"server_getCertificate: Failed to allocate BIO_s_mem";exit(1); }
 	if(!PEM_write_bio_X509(bio, serverCert)) { cerr<<"server_getCertificate: PEM_write_bio_X509 error";exit(1); }
-	char* buffer=NULL;
+	buffer=NULL;
 	long size = BIO_get_mem_data(bio, &buffer);
-	int res= send(socket,buffer,bufsize,0)
 	BIO_free(bio);
-	return res;
+	return size;
+}
+//First server send for each client
+EVP_PKEY* server_send_Certificate_and_ECDHPubKey(int socket, EVP_PKEY* server_key, unsigned char* certbuffer, long certsize, unsigned char* received_nonce, unsigned int nonce_size=4){
+
+//generate nonce
+	int ret;
+	unsigned char* mynonce=(unsigned char*)malloc(nonce_size);
+	if(!mynonce) {cerr<<"server_sendCertificate: mynonce Malloc Error";exit(1);}
+	RAND_poll();
+	ret = RAND_bytes((unsigned char*)&mynonce[0],nonce_size);
+	if(ret!=1){cerr<<"server_sendCertificate:RAND_bytes Error";exit(1);}
+//Generate ECDH key pair
+	unsigned char* buffered_ECDHpubkey;
+	unsigned int pubkeysize=0;
+	EVP_PKEY* dh_prv_key=dh_generate_key(buffered_ECDHpubkey,pubkeysize);
+	unsigned int message_size=pubkeysize+(nonce_size*2);
+//Sign Message
+	unsigned char* message=(unsigned char*) malloc (message_size);
+	if(!message) {cerr<<"server_sendCertificate: message Malloc Error";exit(1);}
+	memcpy(message,received_nonce,nonce_size);
+	memcpy(message+nonce_size,mynonce,nonce_size);
+	memcpy(message+(2*nonce_size),buffered_ECDHpubkey,pubkeysize);
+	unsigned char* signed_buffer;
+	unsigned int signed_size=digsign_sign(100,server_key, message, message_size,signed_buffer);
+	free(mynonce);
+	free(message);
+//Send cert+signed_buffer over socket
+	unsigned char* output_buffer=(unsigned char*)malloc(signed_size+certsize);
+	if(!output_buffer) {cerr<<"server_sendCertificate: output_buffer Malloc Error";exit(1);}
+	memcpy(output_buffer,certbuffer,certsize);
+	memcpy(output_buffer+certsize,signed_buffer,signed_size);
+	ret=send(socket, ouput_buffer,signed_size+certsize,0);
+	if(ret<0){cerr<<"server_sendCertificate: Error writing to socket";exit(1);}	
+	return dh_prv_key;
 }
 
 
@@ -67,7 +100,7 @@ int main(int argc, char *argv[]){
 		 // Sono nel processo figlio
 			close(sockfd);
 		 	int res;
-			res=server_sendCertificate();
+			EVP_KEY* dhpvtkey=server_send_Certificate_and_ECDHPubKey();
 			if(res<0)error("server_sendCertificate: SEND error");
 	
 	

@@ -29,7 +29,7 @@ void handleErrors(void){
 }
 
 //Digital Signature Sign/Verify
-unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned int clear_size,   unsigned char* signed_buffer){
+unsigned int digsign_sign(short opcode,EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned int clear_size,   unsigned char* signed_buffer){
 	int ret; // used for return values
 
 	// create the signature context:
@@ -45,18 +45,24 @@ unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned i
 	// assuming that the plaintext is not huge)
 	ret = EVP_SignInit(md_ctx, md);
 	if(ret == 0){ cerr << "digsign_sign: EVP_SignInit returned " << ret << "\n"; exit(1); }
+	ret = EVP_SignUpdate(md_ctx, (unsigned char*) &opcode, sizeof(short));
+	if(ret == 0){ cerr << "digsign_sign: EVP_SignUpdate returned " << ret << "\n"; exit(1); }
 	ret = EVP_SignUpdate(md_ctx, clear_buf, clear_size);
 	if(ret == 0){ cerr << "digsign_sign: EVP_SignUpdate returned " << ret << "\n"; exit(1); }
 	unsigned int sgnt_size;
 	ret = EVP_SignFinal(md_ctx, sgnt_buf, &sgnt_size, prvkey);
 	if(ret == 0){ cerr << "digsign_sign: EVP_SignFinal returned " << ret << "\n"; exit(1); }
-	if(opcode!=-1)
-	unsigned int signed_buffer_size = sizeof(unsigned int)+sgnt_size+clear_size;
+	unsigned int signed_buffer_size = sizeof(short)+sizeof(unsigned short)+sgnt_size+clear_size;
 	signed_buffer = (unsigned char*)malloc(signed_buffer_size);
 	if(!signed_buffer) { cerr << "digsign_sign: malloc returned NULL (signature too big?)\n"; exit(1); }
-	memcpy(signed_buffer, (char*) &sgnt_size, sizeof(unsigned int)); 
-	memcpy(signed_buffer+sizeof(unsigned int), sgnt_buf, sgnt_size );
-	memcpy(signed_buffer+sizeof(unsigned int)+sgnt_size,clear_buf, clear_size);
+	unsigned int written=0;
+	memcpy(signed_buffer, (unsigned char*) &opcode, sizeof(short));
+	written+= sizeof(short); 	
+	memcpy(signed_buffer+written, (unsigned char*) &sgnt_size, sizeof(unsigned int));
+	written+= sizeof(unsigned int); 
+	memcpy(signed_buffer+written, sgnt_buf, sgnt_size );
+	written+= sgnt_size;
+	memcpy(signed_buffer+written,clear_buf, clear_size);
 
 	// delete the digest from memory:
 	EVP_MD_CTX_free(md_ctx);
@@ -66,18 +72,23 @@ unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned i
 }
 
 
-unsigned int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned int input_size, unsigned char*  clear_buf){
+unsigned int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned int input_size, short &opcode,unsigned char*  clear_buf){
 	int ret;
 	unsigned int sgnt_size;
-	memcpy((char*) &sgnt_size, input_buffer,sizeof(unsigned int));
-	if(input_size < sgnt_size + sizeof(unsigned int)) { cerr << "digsign_verify: signed buffer with wrong format\n"; exit(1); }
+	unsigned int read=0;
+	memcpy((unsigned char*) &opcode, input_buffer,sizeof(short));
+	read+=sizeof(short);
+	memcpy((char*) &sgnt_size, input_buffer+read,sizeof(unsigned int));
+	read+= sizeof(unsigned int); 
+	if(input_size < read+sgnt_size) { cerr << "digsign_verify: signed buffer with wrong format\n"; exit(1); }
 	unsigned char* sgnt_buf=(unsigned char*)malloc(sgnt_size);	
 	if(!sgnt_buf) { cerr << "digsign_verify: malloc returned NULL (signature too big?)\n"; exit(1); }	
-	memcpy(sgnt_buf, input_buffer+sizeof(unsigned int), sgnt_size);
-	unsigned int clear_size= input_size-sgnt_size-sizeof(unsigned int);
+	memcpy(sgnt_buf, input_buffer+read, sgnt_size);
+	read+=sgnt_size;
+	unsigned int clear_size= input_size-read;
 	if(clear_size==0){ cerr << " digsign_verify: empty message \n"; exit(1); }
 	clear_buf=(unsigned char*) malloc(clear_size);
-	memcpy(clear_buf, input_buffer+sizeof(unsigned int)+sgnt_size, clear_size);
+	memcpy(clear_buf, input_buffer+read, clear_size);
 	
 	// create the signature context:
 	EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
@@ -88,6 +99,8 @@ unsigned int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, 
 	// assuming that the plaintext is not huge)
 	ret = EVP_VerifyInit(md_ctx, md);
 	if(ret == 0){ cerr << "Error: EVP_VerifyInit returned " << ret << "\n"; exit(1); }
+	ret = EVP_VerifyUpdate(md_ctx, (unsigned char*) &opcode, sizeof(short));  
+	if(ret == 0){ cerr << "Error: EVP_VerifyUpdate returned " << ret << "\n"; exit(1); }
 	ret = EVP_VerifyUpdate(md_ctx, clear_buf, clear_size);  
 	if(ret == 0){ cerr << "Error: EVP_VerifyUpdate returned " << ret << "\n"; exit(1); }
 	ret = EVP_VerifyFinal(md_ctx, sgnt_buf, sgnt_size, peer_pubkey);
@@ -106,7 +119,7 @@ unsigned int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, 
 
 
 // Diffie-Hellman for session key
-EVP_PKEY* dh_generate_key(char* buffer,unsigned int &buffersize){
+EVP_PKEY* dh_generate_key(unsigned char* buffer,unsigned int &buffersize){
 
 /*GENERATING MY EPHEMERAL KEY*/
 /* Use built-in parameters */
@@ -135,13 +148,11 @@ EVP_PKEY* dh_generate_key(char* buffer,unsigned int &buffersize){
 	BIO* bio = BIO_new(BIO_s_mem());
 	if(!bio) { cerr<<"dh_generate_key: Failed to allocate BIO_s_mem";exit(1); }
 	if(!PEM_write_bio_PUBKEY(bio,  my_dhkey)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
-	char* buf=NULL;
+	buffer=NULL;
 	long size = BIO_get_mem_data(bio, &buffer);
 	if (size<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
-	memcpy(buffer+buffersize,buf,size);
-	buffersize+=size;
+	buffersize=(unsigned int)size;
 	BIO_free(bio);
-
 	return my_dhkey;
 
 } 
@@ -198,14 +209,14 @@ unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int s
 
 
 //Authenticated Encryption/Decryption
-unsigned int auth_encrypt(unsigned char *aad, unsigned int aad_len unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, unsigned char *output_buffer){
-	if(input_len > UINT_MAX-AE_block_size-aad_len-sizeof(unsigned int)-AE_iv_len-AE_tag_len) {cerr<<"Auth encrypt: Output Integer Overflow Error";exit(1);}
+unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len, unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, unsigned char *output_buffer){
+	if(input_len > UINT_MAX-AE_block_size-aad_len-sizeof(unsigned int)-AE_iv_len-AE_tag_len-sizeof(short)) {cerr<<"Auth encrypt: Output Integer Overflow Error";exit(1);}
 	int ret;
 	unsigned char *iv = (unsigned char *)malloc(AE_iv_len);
 	if(!iv) {cerr<<"auth encrypt: iv Malloc Error";exit(1);}
 	RAND_poll();
 	ret = RAND_bytes((unsigned char*)&iv[0],AE_iv_len);
-	if(ret!=1){cerr<<"RAND_bytes Error";exit(1);}
+	if(ret!=1){cerr<<"auth_encrypt:RAND_bytes Error";exit(1);}
 	EVP_CIPHER_CTX *ctx;
 	int len=0;
 	int ciphertext_len=0;
@@ -213,15 +224,19 @@ unsigned int auth_encrypt(unsigned char *aad, unsigned int aad_len unsigned char
 	if(!ciphertext) {cerr<<"auth encrypt: ciphertext Malloc Error";exit(1);}
 	unsigned char* tag = (unsigned char *)malloc(AE_tag_len);
 	if(!tag) {cerr<<"auth encrypt: tag Malloc Error";exit(1);}
+	unsigned char* complete_aad=(unsigned char*)malloc(sizeof(short)+aad_len);
+	if(!complete_aad) {cerr<<"auth encrypt: true_aad Malloc Error";exit(1);}
+	memcpy(complete_aad,(unsigned char*) &opcode,sizeof(short));
+	memcpy(complete_aad+sizeof(short),aad,aad_len);
 	// Create and initialise the context
 	if(!(ctx = EVP_CIPHER_CTX_new()))
 	handleErrors();
 	// Initialise the encryption operation.
 	if(1 != EVP_EncryptInit(ctx, AE_cipher, shared_key, iv))
 	handleErrors();
-
+	
 	//Provide any AAD data. This can be called zero or more times as required
-	if(1 != EVP_EncryptUpdate(ctx, NULL, &len, aad,aad_len))
+	if(1 != EVP_EncryptUpdate(ctx, NULL, &len, complete_aad,aad_len+sizeof(short)))
 	handleErrors();
 
 	if(1 != EVP_EncryptUpdate(ctx, ciphertext, &len, input_buffer, input_len))
@@ -234,40 +249,38 @@ unsigned int auth_encrypt(unsigned char *aad, unsigned int aad_len unsigned char
 	/* Get the tag */
 	if(1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, AE_tag_len, tag))
 	handleErrors();
-	unsigned int output_len = AE_tag_len + ciphertext_len + AE_iv_len+ aad_len+ sizeof(unsigned int);
+	unsigned int output_len = AE_tag_len + ciphertext_len + AE_iv_len+ aad_len+ sizeof(unsigned int) + sizeof(short);
 	output_buffer =(unsigned char *) malloc(output_len);
 	if(!output_buffer) {cerr<<"auth encrypt: output buffer Malloc Error";exit(1);}
 	unsigned int written=0;
-	memcpy(output_buffer, tag, AE_tag_len);
+	memcpy(output_buffer, (unsigned char*) &opcode, sizeof(short));
+	written+=sizeof(short);
+	memcpy(output_buffer + written, tag, AE_tag_len);
 	written+=AE_tag_len;
 	memcpy(output_buffer + written, iv, AE_iv_len);
 	written+=AE_iv_len;
-	memcpy(output_buffer + written, (char*) &aad_len, sizeof(unsigned int));
-	written+=sizeof(unsigned int)
+	memcpy(output_buffer + written, (unsigned char*) &aad_len, sizeof(unsigned int));
+	written+=sizeof(unsigned int);
 	memcpy(output_buffer + written, aad, aad_len);
 	written+=aad_len;
 	memcpy(output_buffer + written, ciphertext, ciphertext_len);
+	written+=ciphertext_len;
 	/* Clean up */
 	EVP_CIPHER_CTX_free(ctx);
 	free(tag);
 	free(iv);
 	free(ciphertext);
-	return output_len;
+	return written;
 	}
 
-unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, unsigned char *output_aad, unsigned int &aad_len, unsigned char *output_buffer)
+unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, short &opcode, unsigned char *output_aad, unsigned int &aad_len, unsigned char *output_buffer)
 {
 	
 	EVP_CIPHER_CTX *ctx;
 	unsigned int read=0;
-	memcpy(tag, input_buffer, AE_tag_len);
-	read+=AE_tag_len;
-	memcpy(iv, input_buffer + read, AE_iv_len);
-	read+=AE_iv_len;
-	memcpy((char*) &aad_len, inputbuffer + read, sizeof(unsigned int));
-	read+=sizeof(unsigned int);
-	memcpy(output_aad, inputbuffer + read, aad_len);
-	read+=aad_len;
+	memcpy((unsigned char*) &opcode, input_buffer , sizeof(short));
+	read+=sizeof(short);
+	
 	if(input_len <= read) { cerr << "Error auth decrypt: encrypted buffer with wrong format\n"; exit(1); }
 	unsigned int ciphertext_len = input_len - read;
 	unsigned int output_len = 0;
@@ -277,6 +290,18 @@ unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, u
 	if(!ciphertext) {cerr<<"auth decrypt: ciphertext Malloc Error";exit(1);}
 	unsigned char* tag = (unsigned char *)malloc(AE_tag_len);
 	if(!tag) {cerr<<"auth decrypt: tag Malloc Error";exit(1);}
+	memcpy(tag, input_buffer + read, AE_tag_len);
+	read+=AE_tag_len;
+	memcpy(iv, input_buffer + read, AE_iv_len);
+	read+=AE_iv_len;
+	memcpy((unsigned char*) &aad_len, input_buffer + read, sizeof(unsigned int));
+	read+=sizeof(unsigned int);
+	memcpy(output_aad, input_buffer + read, aad_len);
+	read+=aad_len;
+	unsigned char* complete_aad=(unsigned char*)malloc(sizeof(short)+aad_len);
+	if(!complete_aad) {cerr<<"auth encrypt: true_aad Malloc Error";exit(1);}
+	memcpy(complete_aad,(unsigned char*) &opcode,sizeof(short));
+	memcpy(complete_aad+sizeof(short),output_aad,aad_len);
 	
 	memcpy(ciphertext, input_buffer + read, ciphertext_len);
 	int ret;
@@ -287,7 +312,7 @@ unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, u
 	if(!EVP_DecryptInit(ctx, AE_cipher, shared_key, iv))
 	handleErrors();
 	//Provide any AAD data.
-	if(!EVP_DecryptUpdate(ctx, NULL, &len, aad, aad_len))
+	if(!EVP_DecryptUpdate(ctx, NULL, &len, complete_aad, sizeof(short)+aad_len))
 	handleErrors();
 	//Provide the message to be decrypted, and obtain the plaintext output.
 	if(!EVP_DecryptUpdate(ctx, output_buffer, &len, ciphertext, ciphertext_len))
