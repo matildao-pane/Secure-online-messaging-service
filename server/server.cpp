@@ -12,10 +12,73 @@ we have:
 #include <sys/types.h> 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <list>           
+#include <queue>
+
+#define MAX_SIZE 10000
 
 void error(const char *msg){
     perror(msg);
     exit(1);
+}
+
+struct user{
+	string nickname;
+	unsigned int id;
+	queue<message_struct> input_queue;
+	queue<message_struct> output_queue;
+}
+struct message_struct{
+	string source;
+	string dest;
+	unsigned char* msg;
+	short opcode;
+}
+
+EVP_KEY* get_client_pubkey(unsigned char* buf, unsigned int buf_lenght){
+	unsigned int read = 0;
+	unsigned int sgnt_size;
+	read+=sizeof(short);
+	memcpy((char*) &sgnt_size, input_buffer+read,sizeof(unsigned int));
+	read+= sizeof(unsigned int); 
+	if(input_size < read+sgnt_size) { cerr << "get_client_pubkey: signed buffer with wrong format\n"; exit(1); }
+	unsigned char* sgnt_buf=(unsigned char*)malloc(sgnt_size);	
+	if(!sgnt_buf) { cerr << "get_client_pubkey: malloc returned NULL (signature too big?)\n"; exit(1); }	
+	memcpy(sgnt_buf, input_buffer+read, sgnt_size);
+	read+=sgnt_size;
+	unsigned int clear_size= input_size-read;
+	if(clear_size==0){ cerr << " get_client_pubkey: empty message \n"; exit(1); }
+	clear_buf=(unsigned char*) malloc(clear_size);	
+	memcpy(clear_buf, input_buffer+read, clear_size);
+	unsigned int username_size = clear_size - sizeof(unsigned int);
+	char* username = (unsigned char*)malloc(username_size + 1);
+	if(!username){cerr<<"get client pubkey: username Malloc Error";exit(1);}
+	memcpy(username, clear_buf + sizeof(unsigned int), username_size);
+	username[username_size] = '\0';
+	
+	EVP_PKEY* pubkey;
+	FILE* file = fopen(username.c_str() + ".pem", "r");
+	if(!file) {cerr<<"File Open Error";exit(1);}   
+	pubkey= PEM_read_PUBKEY(file, NULL, NULL, NULL);
+	if(!pubkey) {cerr<<"Pubkey Error";exit(1);}
+	fclose(file);
+	return pubkey;
+	
+
+
+}
+
+void client_handler(int fd, thread_queues my_queues) {
+	int res;
+	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
+	if(!buffer){cerr<<"client handler: buffer Malloc Error";exit(1);}
+	res = recv(fd, buffer, MAX_SIZE, 0);
+	if(res<0){cerr<<"client handler: receive error"; exit(1);}
+	
+	EVP_KEY* dhpvtkey=server_send_Certificate_and_ECDHPubKey();
+	
 }
 
 
@@ -71,7 +134,10 @@ EVP_PKEY* server_send_Certificate_and_ECDHPubKey(int socket, EVP_PKEY* server_ke
 
 
 int main(int argc, char *argv[]){
-	int sockfd, newsockfd, portno;
+	std::vector<std::thread> threads;
+	std::vector<struct users> users_list;
+	
+	int sockfd, portno;
 	socklen_t clilen;
 	pid_t pid;
 	char buffer[256];
@@ -82,6 +148,7 @@ int main(int argc, char *argv[]){
 		exit(1);
 	}
 	sockfd =  socket(AF_INET, SOCK_STREAM, 0);
+	fcntl(sockfd, F_SETFL, O_NONBLOCK);
 	if (sockfd < 0) error("ERROR opening socket");
      	bzero((char *) &serv_addr, sizeof(serv_addr));
     	portno = atoi(argv[1]);
@@ -91,21 +158,33 @@ int main(int argc, char *argv[]){
 	if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) error("ERROR on binding");
 	listen(sockfd,10); 
 	clilen = sizeof(cli_addr);
+
+		
 	while(1){ //wait  (processo sempre in attesa, aspetta richieste qualsiasi)
-		newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen;);
+		int newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen;);
 		if (newsockfd < 0) error("ERROR on accept");
-		pid = fork(); //creo nuovo processo in attesa di altri client. fork
-		if (pid == -1) error("ERROR on fork");
-		if (pid == 0) {
-		 // Sono nel processo figlio
-			close(sockfd);
-		 	int res;
-			EVP_KEY* dhpvtkey=server_send_Certificate_and_ECDHPubKey();
-			if(res<0)error("server_sendCertificate: SEND error");
-	
-	
-	
-	
+		if (errno != EAGAIN || errno != EWOULDBLOCK)
+			error("ERROR on accept");
+		struct user u;
+		u.nickname = NULL;
+		u.id = users_list.size();
+		users_list.push_back(u);
+		threads.push_back(std::thread(&client_handler, newsockfd, users_list.back()));
+		
+		for(int i=0; i<threads.size(); i++){			
+			while(!users_list[i].input_queue.empty()){
+			
+				struct message_struct message = users_list[i].input_queue.front();
+				users_list[i].input_queue.pop();
+				for(int j = 0; j < users_list.size(); j++){
+					if(strcmp(message.dest, users_list[j].nickname) == 0){
+						users_list[j].output_queue.push(message);
+					}
+				}
+			
+			}
+		
+		} 	
 
 //[1] AUTH CLIENT ricevo un mex da un client (login client, auth)
 
@@ -153,7 +232,8 @@ int main(int argc, char *argv[]){
 		// Sono nel processo padre
 		close(newsockfd);
 	}
-
+	for(auto&& t : threads)
+		t.join();
      close(sockfd);
      return 0; 
 }
