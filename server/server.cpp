@@ -16,19 +16,24 @@ we have:
 #include <errno.h>
 #include <list>           
 #include <queue>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/err.h>
+#include "../security_functions.h"
 
 #define MAX_SIZE 10000
-
+#define NONCE_SIZE 4
 void error(const char *msg){
     perror(msg);
     exit(1);
 }
 
 struct user{
-	string nickname;
-	unsigned int id;
+	string nickname=NULL;
 	queue<message_struct> input_queue;
 	queue<message_struct> output_queue;
+	bool online=FALSE;
 }
 struct message_struct{
 	string source;
@@ -37,106 +42,167 @@ struct message_struct{
 	short opcode;
 }
 
-EVP_KEY* get_client_pubkey(unsigned char* buf, unsigned int buf_lenght){
+string get_client_nickname(unsigned char* buf, unsigned int buf_lenght){
 	unsigned int read = 0;
 	unsigned int sgnt_size;
 	read+=sizeof(short);
 	memcpy((char*) &sgnt_size, input_buffer+read,sizeof(unsigned int));
 	read+= sizeof(unsigned int); 
-	if(input_size < read+sgnt_size) { cerr << "get_client_pubkey: signed buffer with wrong format\n"; exit(1); }
-	unsigned char* sgnt_buf=(unsigned char*)malloc(sgnt_size);	
-	if(!sgnt_buf) { cerr << "get_client_pubkey: malloc returned NULL (signature too big?)\n"; exit(1); }	
-	memcpy(sgnt_buf, input_buffer+read, sgnt_size);
+	if(input_size < read+sgnt_size) { cerr << "get_client_pubkey: signed buffer with wrong format\n"; exit(1); }	
 	read+=sgnt_size;
 	unsigned int clear_size= input_size-read;
 	if(clear_size==0){ cerr << " get_client_pubkey: empty message \n"; exit(1); }
-	clear_buf=(unsigned char*) malloc(clear_size);	
-	memcpy(clear_buf, input_buffer+read, clear_size);
-	unsigned int username_size = clear_size - sizeof(unsigned int);
+	unsigned int username_size = clear_size - NONCE_SIZE;
 	char* username = (unsigned char*)malloc(username_size + 1);
-	if(!username){cerr<<"get client pubkey: username Malloc Error";exit(1);}
-	memcpy(username, clear_buf + sizeof(unsigned int), username_size);
+	if(!username){cerr<<"get client pubkey: username Malloc Error";exit(1);}	
+	memcpy(username, input_buffer+read + NONCE_SIZE, username_size);
 	username[username_size] = '\0';
-	
-	EVP_PKEY* pubkey;
-	FILE* file = fopen(username.c_str() + ".pem", "r");
-	if(!file) {cerr<<"File Open Error";exit(1);}   
-	pubkey= PEM_read_PUBKEY(file, NULL, NULL, NULL);
-	if(!pubkey) {cerr<<"Pubkey Error";exit(1);}
-	fclose(file);
-	return pubkey;
-	
-
-
+	return username;
 }
 
-void client_handler(int fd, thread_queues my_queues) {
-	int res;
-	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
-	if(!buffer){cerr<<"client handler: buffer Malloc Error";exit(1);}
-	res = recv(fd, buffer, MAX_SIZE, 0);
-	if(res<0){cerr<<"client handler: receive error"; exit(1);}
-	
-	EVP_KEY* dhpvtkey=server_send_Certificate_and_ECDHPubKey();
-	
+char* get_nonce(unsigned char* buf, unsigned int buf_lenght){
+	unsigned int read = 0;
+	unsigned int sgnt_size;
+	read+=sizeof(short);
+	memcpy((char*) &sgnt_size, input_buffer+read,sizeof(unsigned int));
+	read+= sizeof(unsigned int); 
+	if(input_size < read+sgnt_size) { cerr << "get_client_pubkey: signed buffer with wrong format\n"; exit(1); }	
+	read+=sgnt_size;
+	unsigned int clear_size= input_size-read;
+	if(clear_size==0){ cerr << " get nonce: empty message \n"; exit(1); }
+	char* recv_nonce = (unsigned char*)malloc(NONCE_SIZE);
+	if(!recv_nonce){cerr<<"get nonce: recv_nonce Malloc Error";exit(1);}	
+	memcpy(recv_nonce, input_buffer+read , NONCE_SIZE);
+	return recv_nonce;
 }
 
-
-//authentication 
-long server_getCertificate(unsigned char* buffer){
-	X509* serverCert;
-	FILE* file = fopen("ChatServer_cert.pem", "r");
-	if(!file) { cerr<<"server_getCertificate: File Open Error";exit(1);}
-	serverCert = PEM_read_X509(file, NULL, NULL, NULL);
-	if(!serverCert) { cerr<<"server_getCertificate: PEM_read_X509 error";exit(1); }
-	fclose(file);
-	if(!BIO* bio = BIO_new(BIO_s_mem())) { cerr<<"server_getCertificate: Failed to allocate BIO_s_mem";exit(1); }
-	if(!PEM_write_bio_X509(bio, serverCert)) { cerr<<"server_getCertificate: PEM_write_bio_X509 error";exit(1); }
-	buffer=NULL;
-	long size = BIO_get_mem_data(bio, &buffer);
-	BIO_free(bio);
-	return size;
-}
 //First server send for each client
-EVP_PKEY* server_send_Certificate_and_ECDHPubKey(int socket, EVP_PKEY* server_key, unsigned char* certbuffer, long certsize, unsigned char* received_nonce, unsigned int nonce_size=4){
+EVP_PKEY* server_send_Certificate_and_ECDHPubKey(int socket, EVP_PKEY* server_key, unsigned char* received_nonce, unsigned char* mynonce){
 
-//generate nonce
 	int ret;
-	unsigned char* mynonce=(unsigned char*)malloc(nonce_size);
-	if(!mynonce) {cerr<<"server_sendCertificate: mynonce Malloc Error";exit(1);}
-	RAND_poll();
-	ret = RAND_bytes((unsigned char*)&mynonce[0],nonce_size);
-	if(ret!=1){cerr<<"server_sendCertificate:RAND_bytes Error";exit(1);}
 //Generate ECDH key pair
 	unsigned char* buffered_ECDHpubkey;
 	unsigned int pubkeysize=0;
 	EVP_PKEY* dh_prv_key=dh_generate_key(buffered_ECDHpubkey,pubkeysize);
-	unsigned int message_size=pubkeysize+(nonce_size*2);
+	unsigned int message_size=pubkeysize+(NONCE_SIZE*2);
 //Sign Message
 	unsigned char* message=(unsigned char*) malloc (message_size);
 	if(!message) {cerr<<"server_sendCertificate: message Malloc Error";exit(1);}
-	memcpy(message,received_nonce,nonce_size);
-	memcpy(message+nonce_size,mynonce,nonce_size);
-	memcpy(message+(2*nonce_size),buffered_ECDHpubkey,pubkeysize);
+	memcpy(message,received_nonce,NONCE_SIZE);
+	memcpy(message+NONCE_SIZE,mynonce,NONCE_SIZE);
+	memcpy(message+(2*NONCE_SIZE),buffered_ECDHpubkey,pubkeysize);
 	unsigned char* signed_buffer;
-	unsigned int signed_size=digsign_sign(100,server_key, message, message_size,signed_buffer);
+	unsigned int signed_size=digsign_sign(server_key, message, message_size,signed_buffer);
 	free(mynonce);
 	free(message);
+//Retrieve Certificate
+	X509* serverCert;
+	FILE* file = fopen("ChatServer_cert.pem", "r");
+	if(!file) { cerr<<"server_sendCertificate: File Open Error";exit(1);}
+	serverCert = PEM_read_X509(file, NULL, NULL, NULL);
+	if(!serverCert) { cerr<<"server_sendCertificate: PEM_read_X509 error";exit(1); }
+	fclose(file);
+	if(!BIO* bio = BIO_new(BIO_s_mem())) { cerr<<"server_sendCertificatee: Failed to allocate BIO_s_mem";exit(1); }
+	if(!PEM_write_bio_X509(bio, serverCert)) { cerr<<"server_sendCertificate: PEM_write_bio_X509 error";exit(1); }
+	unsigned char* certbuffer=NULL;
+	long certsize= BIO_get_mem_data(bio, &buffer);
+	BIO_free(bio);
 //Send cert+signed_buffer over socket
-	unsigned char* output_buffer=(unsigned char*)malloc(signed_size+certsize);
+	unsigned char* output_buffer=(unsigned char*)malloc(signed_size+certsize+sizeof(long);
 	if(!output_buffer) {cerr<<"server_sendCertificate: output_buffer Malloc Error";exit(1);}
-	memcpy(output_buffer,certbuffer,certsize);
-	memcpy(output_buffer+certsize,signed_buffer,signed_size);
+	memcpy(output_buffer,certsize,sizeof(long));
+	memcpy(output_buffer+sizeof(long),certbuffer,certsize);
+	memcpy(output_buffer+sizeof(long)+certsize,signed_buffer,signed_size);
 	ret=send(socket, ouput_buffer,signed_size+certsize,0);
-	if(ret<0){cerr<<"server_sendCertificate: Error writing to socket";exit(1);}	
+	if(ret<0){cerr<<"server_sendCertificate: Error writing to socket";exit(1);}
+	free(certbuffer);
+	free(output_buffer);	
 	return dh_prv_key;
+}
+
+//thread function
+void client_handler(int fd, struct user my_user) {
+	int ret;
+	short opcode;
+	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
+	if(!buffer){cerr<<"client handler: buffer Malloc Error";exit(1);}
+	unsigned char* outputbuf;
+	
+	
+	ret = recv(fd, buffer, MAX_SIZE, 0);
+	if(ret<0){cerr<<"client handler: receive error"; exit(1);}
+	my_user.nickname=get_client_nickname(buffer,ret);
+	//Get user pubkey
+	EVP_PKEY* client_pubkey;
+	FILE* file = fopen("pubkeys/"+my_user.nickname + ".pem", "r");
+	if(!file) {
+	cerr<<"client_handler: Incorrect Username";
+	return;}   
+	client_pubkey= PEM_read_PUBKEY(file, NULL, NULL, NULL);
+	if(!client_pubkey) {cerr<<"client_handler: Pubkey Error";exit(1);}
+	fclose(file);
+	char* receivednonce[NONCE_SIZE];
+	ret=digsign_verify(client_pubkey,buffer, ret, outputbuf);
+	if(ret<0){"client handler: invalid signature!"; return;}
+	memcpy((receivednonce, outputbuf, NONCE_SIZE);
+	//Send certificate and ecdhpubkey.
+	EVP_PKEY* server_key;
+	FILE* file = fopen("ChatServer_key.pem", "r");
+	if(!file) {cerr<<"File Open Error";exit(1);}   
+	server_key= PEM_read_PrivateKey(file, NULL, NULL, NULL);
+	if(!server_key) {cerr<<"server_key Error";exit(1);}
+	fclose(file);
+
+	unsigned char* mynonce=(unsigned char*)malloc(NONCE_SIZE);
+	if(!mynonce) {cerr<<"client handler: mynonce Malloc Error";exit(1);}
+	RAND_poll();
+	ret = RAND_bytes((unsigned char*)&mynonce[0],NONCE_SIZE);
+	if(ret!=1){cerr<<"client handler:RAND_bytes Error";exit(1);}	
+	EVP_PKEY* dhpvtkey=server_send_Certificate_and_ECDHPubKey(fd, server_key, receivednonce, mynonce);
+	EVP_PKEY_free(server_key);
+	bool correct_message=FALSE;
+	//Get ecdhpubkey from client
+	while(!correct_message){
+		ret = recv(fd, buffer, MAX_SIZE, 0);
+		if(ret<0){cerr<<"client handler: receive error"; exit(1);}
+		//Verify Nonce
+		receivednonce=get_nonce(buffer,ret);
+		correct_message=TRUE;
+		if (memcmp(receivednonce,mynonce,NONCE_SIZE)!=0){
+			cerr<<"client handler: nonce received is not valid!";
+			correct_message=FALSE;
+		}
+		ret=digsign_verify(client_pubkey,buffer, ret, outputbuf);
+		if(ret<0){"client handler: invalid signature!"; correct_message=FALSE;}
+	}
+	EVP_PKEY_free(client_pubkey);
+	BIO* mbio= BIO_new(BIO_s_mem());	
+	BIO_write(mbio, buffer+NONCE_SIZE, ret-NONCE_SIZE);
+	EVP_PKEY* ecdh_client_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
+	BIO_free(mbio);
+	char* shared_secret;
+	//compute shared secret and session key
+	ret=dh_derive_shared_secret(ecdh_client_pubkey, dhpvtkey, shared_secret);
+	EVP_PKEY_free(ecdh_client_pubkey);
+	EVP_PKEY_free(dhpvtkey);
+	char* sessionkey;
+	ret=dh_generate_session_key(shared_secret, ret, sessionkey);
+	free(shared_secret);
+	unsigned int send_counter,recv_counter=0;
+	my_user.online=TRUE;
+	//add user to list
+	//send list
+	
+	
+	
+	
 }
 
 
 int main(int argc, char *argv[]){
 	std::vector<std::thread> threads;
 	std::vector<struct users> users_list;
-	
+	unsigned int counter=0;
 	int sockfd, portno;
 	socklen_t clilen;
 	pid_t pid;
@@ -160,42 +226,50 @@ int main(int argc, char *argv[]){
 	clilen = sizeof(cli_addr);
 
 		
-	while(1){ //wait  (processo sempre in attesa, aspetta richieste qualsiasi)
+	while(1){
 		int newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen;);
 		if (newsockfd < 0) error("ERROR on accept");
-		if (errno != EAGAIN || errno != EWOULDBLOCK)
+		{
+			if (errno != EAGAIN || errno != EWOULDBLOCK)
 			error("ERROR on accept");
-		struct user u;
-		u.nickname = NULL;
-		u.id = users_list.size();
-		users_list.push_back(u);
-		threads.push_back(std::thread(&client_handler, newsockfd, users_list.back()));
-		
-		for(int i=0; i<threads.size(); i++){			
-			while(!users_list[i].input_queue.empty()){
-			
-				struct message_struct message = users_list[i].input_queue.front();
-				users_list[i].input_queue.pop();
-				for(int j = 0; j < users_list.size(); j++){
-					if(strcmp(message.dest, users_list[j].nickname) == 0){
-						users_list[j].output_queue.push(message);
+			else{
+				for(int i=0; i<users_list.size(); i++){			
+				while(!users_list[i].input_queue.empty()){
+				
+					struct message_struct message = users_list[i].input_queue.front();
+					users_list[i].input_queue.pop();
+					for(int j = 0; j < users_list.size(); j++){
+						if(strcmp(message.dest, users_list[j].nickname) == 0){
+							users_list[j].output_queue.push(message);
+						}
 					}
+				
 				}
 			
 			}
-		
+		}
+		else{
+			struct user u;
+			u.nickname = NULL;
+			users_list.push_back(u);
+			threads.push_back(std::thread(&client_handler, newsockfd, users_list.back()));	
+			for(int i=0; i<threads.size(); i++){			
+				while(!users_list[i].input_queue.empty()){
+				
+					struct message_struct message = users_list[i].input_queue.front();
+					users_list[i].input_queue.pop();
+					for(int j = 0; j < users_list.size(); j++){
+						if(strcmp(message.dest, users_list[j].nickname) == 0){
+							users_list[j].output_queue.push(message);
+						}
+					}
+				
+				}
+			
+			}
 		} 	
 
-//[1] AUTH CLIENT ricevo un mex da un client (login client, auth)
 
-//send autenticazione al client(certificato)
-//wait 
-//receive client_auth 
-//genera p,g, parte_sr_dh_key
-//send parte_sr_dh_key
-//receive parte_cl_dh_key
-//unisco parti e genero la dh_key_cs
-//send user list criptata
 
 //aggiungi l'utente nella lista disponibile( dopo averla mandata così non richiede di parlare ocn se stesso)
 
@@ -234,8 +308,8 @@ int main(int argc, char *argv[]){
 	}
 	for(auto&& t : threads)
 		t.join();
-     close(sockfd);
-     return 0; 
+	close(sockfd);
+	return 0; 
 }
 
 

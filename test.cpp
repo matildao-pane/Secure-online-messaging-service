@@ -1,4 +1,4 @@
-#include "security_functions.cpp"
+#include "security_functions.h"
 using namespace std;
 int main() {
   //128 bit key (16 characters * 8 bit)

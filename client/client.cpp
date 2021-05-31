@@ -3,19 +3,31 @@
 -my public key
 -authority public key
 */
-
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
 #include <iostream> 
-#include <string>
 #include <stdio.h> // for fopen(), etc.
 #include <limits.h> // for INT_MAX
 #include <string.h> // for memset()
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509_vfy.h>
-#include <openssl/err.h> // for error descriptions
+#include <openssl/err.h>
+#define MAX_SIZE 10000
+#define NONCE_SIZE 4
+void error(const char *msg)
+{
+    perror(msg);
+    exit(1);
+}
+
 
 //authentication, login
-EVP_PKEY* verify_server_certificate( unsigned char* buffer, unsigned int* buffer_size ){
+EVP_PKEY* verify_server_certificate( unsigned char* buffer, long buffer_size ){
 	
 	 int ret; // used for return values
 
@@ -87,18 +99,73 @@ void  print_users_list(){
 	return 0;
 }
 
-int main(){
-//send richiesta login
-//attendo certificato
-//ricevo autenticazione dal server (certificato)
-//send server a mex : client_auth criptata con seal envelope criptando con autority public key
-
-//wait
-//receivo parte_sr_dh_key dal server
-//genera p,g e parte_cl_dh_key (?)
-//send parte_cl_dh_key al server
-//unisco parti e genero dh_key_cs 
-
+int main(int argc, char *argv[]){
+	int sockfd, portno, ret;
+	struct sockaddr_in serv_addr;
+	struct hostent *server;
+	if(strlen(argv[3])>20){cerr<<"Username lenght error";exit(1);}
+	char* username=argv[3];
+	if (argc < 4) {
+	fprintf("usage %s hostname port username\n", argv[0]);exit(1);}
+	portno = atoi(argv[2]);
+	
+	EVP_PKEY* user_key;
+	FILE* file = fopen("users/"+username.c_str()+".pem", "r");
+	if(!file) {cerr<<"User does not have a key file";exit(1);}   
+	user_key= PEM_read_PrivateKey(file, NULL, NULL, NULL);
+	if(!user_key) {cerr<<"user_key Error";exit(1);}
+	fclose(file);
+	
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd < 0) 
+	error("ERROR opening socket");
+	server = gethostbyname(argv[1]);
+	if (server == NULL) {cerr<<"ERROR, no such host\n");exit(1);}
+	bzero((char *) &serv_addr, sizeof(serv_addr));
+	serv_addr.sin_family = AF_INET;
+	bcopy((char *)server->h_addr, 
+	(char *)&serv_addr.sin_addr.s_addr,
+	server->h_length);
+	serv_addr.sin_port = htons(portno);
+	if (connect(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) 
+	error("ERROR connecting");
+	//Send nonce and username
+	unsigned char* mynonce=(unsigned char*)malloc(NONCE_SIZE);
+	if(!mynonce) {cerr<<"mynonce Malloc Error";exit(1);}
+	RAND_poll();
+	ret = RAND_bytes((unsigned char*)&mynonce[0],NONCE_SIZE);
+	if(ret!=1){cerr<<"RAND_bytes Error";exit(1);}
+	unsigned char* buffer=unsigned char* malloc(MAX_SIZE);
+	memcpy(buffer,mynonce,NONCE_SIZE);
+	memcpy(buffer+NONCE_SIZE,username,strlen(username));
+	if(!buffer){cerr<<"buffer Malloc Error";exit(1);}
+	unsigned char* outputbuf;
+	ret=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),outputbuf);
+	ret=send(sockfd, outputbuf, ret, 0);
+	if(ret<0){cerr<<"Error writing to socket";exit(1);}
+	//Verify server certificate
+	ret=recv(sockfd,buffer,MAX_SIZE,0);
+	if(ret<0){cerr<<"Error reading from socket";exit(1);}
+	long certsize;
+	memcpy((char*)&certsize,buffer,sizeof(long));
+	unsigned char* cert = (unsigned char*) malloc(certsize);
+	read=sizeof(long);
+	memcpy(cert,buffer+read,certsize);
+	EVP_PKEY* server_pubkey= verify_server_certificate( cert, certsize )
+	read+=certsize;
+	unsigned int signsize;
+	memcpy((char*)&signsize,buffer+read,sizeof(unsigned int));	
+	if(memcmp(buffer+read+sizeof(unsigned int)+signsize,mynonce,NONCE_SIZE)!=0){
+			cerr<<"nonce received is not valid!";
+			exit(1);
+	}
+	free(mynonce);
+	ret= digsign_verify(server_pubkey,buffer+read,ret-read,outpubuf);
+	if(ret<=0){cerr<<"signature is invalid"; exit(1);}
+	char* servernonce=(unsigned char*) malloc(NONCE_SIZE);
+	memcpy(servernonce,outputbuf+NONCE_SIZE,NONCE_SIZE);
+	char* ecdh_server_buffer=malloc(ret-(2*NONCE_SIZE));
+	//memcpy, bio per trasformare in chiave, quindi generare mia parte, inviare e poi computare chiave completa. 	
 //SPLIT: divento disponible anche agli altri
 //receive users list dal server   
 

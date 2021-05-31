@@ -164,9 +164,6 @@ unsigned int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_ke
 	if (!shared_secret) handleErrors();
 	/*Perform again the derivation and store it in shared_secret buffer*/
 	if (EVP_PKEY_derive(derive_ctx, shared_secret, &shared_secretlen) <= 0) handleErrors();
-// INIZIO PULIZIA PARAMETRI PASSATI
-	
-// FINE PULIZIA PARAMETRI PASSATI
 	EVP_PKEY_CTX_free(derive_ctx);
 	
 	return (unsigned int)shared_secretlen;
@@ -333,7 +330,7 @@ unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, u
 	return 0;
 	}
 }
-
+/*
 //simmetric encryption and decription using generated key
 int cbc_encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *key, unsigned char *ciphertext){
 	int ret;
@@ -403,7 +400,7 @@ int cbc_decrypt(unsigned char *ciphertext, int ciphertext_len, unsigned char *ke
 	return plaintext_len;
 }
 
-/*
+
 //Asymmetric encription and decription. for initial exange and negotiation(?)
 unsigned int envelope_seal(EVP_PKEY* peer_pubkey, unsigned char* cleartext, unsigned int clear_size, unsigned char* outputbuffer){
 	int ret;
