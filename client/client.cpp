@@ -17,8 +17,11 @@
 #include <openssl/pem.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/err.h>
+#include "../security_functions.h"
+
 #define MAX_SIZE 10000
 #define NONCE_SIZE 4
+#define USERNAME_SIZE 20
 void error(const char *msg)
 {
     perror(msg);
@@ -96,21 +99,29 @@ void  print_users_list(){
 	//receive
 
 
-	return 0;
+	return ;
 }
 
 int main(int argc, char *argv[]){
 	int sockfd, portno, ret;
 	struct sockaddr_in serv_addr;
 	struct hostent *server;
-	if(strlen(argv[3])>20){cerr<<"Username lenght error";exit(1);}
-	char* username=argv[3];
+	if(strlen(argv[3])>USERNAME_SIZE){cerr<<"Username lenght error";exit(1);}
+	 
+	 char* username = argv[3];
+	char u_name[USERNAME_SIZE];
+	strncpy(u_name, argv[3],USERNAME_SIZE);
+	char filename[] = "users/";
+	strcat(filename,u_name);
+	char endname[] = ".pem";
+	strcat(filename,endname);
+	
 	if (argc < 4) {
-	fprintf("usage %s hostname port username\n", argv[0]);exit(1);}
+	sprintf("usage %s hostname port username\n", argv[0]);exit(1);}
 	portno = atoi(argv[2]);
 	
 	EVP_PKEY* user_key;
-	FILE* file = fopen("users/"+username.c_str()+".pem", "r");
+	FILE* file = fopen(filename, "r");
 	if(!file) {cerr<<"User does not have a key file";exit(1);}   
 	user_key= PEM_read_PrivateKey(file, NULL, NULL, NULL);
 	if(!user_key) {cerr<<"user_key Error";exit(1);}
@@ -120,7 +131,7 @@ int main(int argc, char *argv[]){
 	if (sockfd < 0) 
 	error("ERROR opening socket");
 	server = gethostbyname(argv[1]);
-	if (server == NULL) {cerr<<"ERROR, no such host\n");exit(1);}
+	if (server == NULL) {cerr<<"ERROR, no such host\n";exit(1);}
 	bzero((char *) &serv_addr, sizeof(serv_addr));
 	serv_addr.sin_family = AF_INET;
 	bcopy((char *)server->h_addr, 
@@ -135,23 +146,35 @@ int main(int argc, char *argv[]){
 	RAND_poll();
 	ret = RAND_bytes((unsigned char*)&mynonce[0],NONCE_SIZE);
 	if(ret!=1){cerr<<"RAND_bytes Error";exit(1);}
-	unsigned char* buffer=unsigned char* malloc(MAX_SIZE);
+	unsigned char* buffer=(unsigned char*) malloc(MAX_SIZE);
+	if(!buffer){cerr<<"buffer Malloc Error";exit(1);}
+	
 	memcpy(buffer,mynonce,NONCE_SIZE);
 	memcpy(buffer+NONCE_SIZE,username,strlen(username));
-	if(!buffer){cerr<<"buffer Malloc Error";exit(1);}
-	unsigned char* outputbuf;
+	cout<<buffer<<endl;
+
+
+//////////
+unsigned char buff[]="ciaone";
+ret=send(sockfd, buff, 7, 0);
+//////////
+
+	unsigned char* outputbuf=(unsigned char* )malloc(1);
 	ret=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),outputbuf);
+
+	cout<<ret<<endl;
+	
 	ret=send(sockfd, outputbuf, ret, 0);
-	if(ret<0){cerr<<"Error writing to socket";exit(1);}
+	if(ret<=0){cerr<<"Error writing to socket";exit(1);}
 	//Verify server certificate
 	ret=recv(sockfd,buffer,MAX_SIZE,0);
 	if(ret<0){cerr<<"Error reading from socket";exit(1);}
 	long certsize;
 	memcpy((char*)&certsize,buffer,sizeof(long));
 	unsigned char* cert = (unsigned char*) malloc(certsize);
-	read=sizeof(long);
+	int read=(int)sizeof(long);
 	memcpy(cert,buffer+read,certsize);
-	EVP_PKEY* server_pubkey= verify_server_certificate( cert, certsize )
+	EVP_PKEY* server_pubkey= verify_server_certificate( cert, certsize );
 	read+=certsize;
 	unsigned int signsize;
 	memcpy((char*)&signsize,buffer+read,sizeof(unsigned int));	
@@ -160,11 +183,36 @@ int main(int argc, char *argv[]){
 			exit(1);
 	}
 	free(mynonce);
-	ret= digsign_verify(server_pubkey,buffer+read,ret-read,outpubuf);
+	ret= digsign_verify(server_pubkey,buffer+read,ret-read,outputbuf);
 	if(ret<=0){cerr<<"signature is invalid"; exit(1);}
-	char* servernonce=(unsigned char*) malloc(NONCE_SIZE);
+	unsigned char* servernonce=(unsigned char*) malloc(NONCE_SIZE);
+	if(!servernonce){cerr<<"servernonce Malloc Error";exit(1);}
 	memcpy(servernonce,outputbuf+NONCE_SIZE,NONCE_SIZE);
-	char* ecdh_server_buffer=malloc(ret-(2*NONCE_SIZE));
+	BIO* mbio= BIO_new(BIO_s_mem());	
+	BIO_write(mbio, outputbuf+2*NONCE_SIZE, ret-2*NONCE_SIZE);
+	EVP_PKEY* ecdh_server_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
+	BIO_free(mbio);
+	unsigned int keysize;
+	EVP_PKEY* ecdh_priv_key = dh_generate_key(outputbuf, keysize); 	//in outputbuf we get ecdh_client_pubkey
+	unsigned int buf_size=0;
+	memcpy(buffer, servernonce, NONCE_SIZE);
+	buf_size+= NONCE_SIZE;
+	memcpy(buffer+NONCE_SIZE, outputbuf, keysize);	
+	buf_size+=keysize;
+	unsigned char* shared_secret;
+	ret=  dh_derive_shared_secret( ecdh_server_pubkey , ecdh_priv_key , shared_secret);
+	EVP_PKEY_free(ecdh_server_pubkey);
+	unsigned char* server_sessionkey;
+	ret = dh_generate_session_key( shared_secret, ret , server_sessionkey);
+	free(shared_secret);
+	ret = digsign_sign(user_key, buffer, buf_size, outputbuf);
+	ret=send(sockfd, outputbuf, ret, 0);
+	unsigned int srv_rcv_counter, srv_counter=0;
+	
+	
+	//
+
+	
 	//memcpy, bio per trasformare in chiave, quindi generare mia parte, inviare e poi computare chiave completa. 	
 //SPLIT: divento disponible anche agli altri
 //receive users list dal server   
