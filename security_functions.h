@@ -31,7 +31,9 @@ void handleErrors(void){
 //Digital Signature Sign/Verify
 unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned int clear_size,   unsigned char* signed_buffer){
 	int ret; // used for return values
-
+	
+	cout<<"cb:"<<clear_buf<<endl;
+	
 	// create the signature context:
 	EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
 	if(!md_ctx){ cerr << "digsign_sign: EVP_MD_CTX_new returned NULL\n"; exit(1); }
@@ -50,15 +52,18 @@ unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned i
 	unsigned int sgnt_size;
 	ret = EVP_SignFinal(md_ctx, sgnt_buf, &sgnt_size, prvkey);
 	if(ret == 0){ cerr << "digsign_sign: EVP_SignFinal returned " << ret << "\n"; exit(1); }
-	unsigned int signed_buffer_size = sizeof(unsigned int)+sgnt_size+clear_size;
+	unsigned int signed_buffer_size = sgnt_size+clear_size;
+	free(signed_buffer);
 	signed_buffer = (unsigned char*)malloc(signed_buffer_size);
 	if(!signed_buffer) { cerr << "digsign_sign: malloc returned NULL (signature too big?)\n"; exit(1); }
 	unsigned int written=0;	
-	memcpy(signed_buffer, (unsigned char*) &sgnt_size, sizeof(unsigned int));
-	written+= sizeof(unsigned int); 
+	
 	memcpy(signed_buffer+written, sgnt_buf, sgnt_size );
 	written+= sgnt_size;
+	cout<<"written"<<written<<endl;
 	memcpy(signed_buffer+written,clear_buf, clear_size);
+	
+	cout<<"sb:"<<signed_buffer<<endl;
 
 	// delete the digest from memory:
 	EVP_MD_CTX_free(md_ctx);
@@ -70,17 +75,17 @@ unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned i
 
 int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned int input_size, unsigned char*  clear_buf){
 	int ret;
-	unsigned int sgnt_size;
+	unsigned int sgnt_size= EVP_PKEY_size(peer_pubkey);	//take the first 4 bytes(unsigned int) of buffer  
 	unsigned int read=0;
-	memcpy((char*) &sgnt_size, input_buffer,sizeof(unsigned int));
-	read+= sizeof(unsigned int); 
-	if(input_size < read+sgnt_size) { cerr << "digsign_verify: signed buffer with wrong format\n"; exit(1); }
+	 
+	if(input_size < sgnt_size) { cerr << "digsign_verify: signed buffer with wrong format\n"; exit(1); }
 	unsigned char* sgnt_buf=(unsigned char*)malloc(sgnt_size);	
 	if(!sgnt_buf) { cerr << "digsign_verify: malloc returned NULL (signature too big?)\n"; exit(1); }	
 	memcpy(sgnt_buf, input_buffer+read, sgnt_size);
 	read+=sgnt_size;
 	int clear_size= input_size-read;
 	if(clear_size==0){ cerr << " digsign_verify: empty message \n"; exit(1); }
+	free(clear_buf);
 	clear_buf=(unsigned char*) malloc(clear_size);
 	memcpy(clear_buf, input_buffer+read, clear_size);
 	
@@ -140,6 +145,7 @@ EVP_PKEY* dh_generate_key(unsigned char* buffer,unsigned int &buffersize){
 	BIO* bio = BIO_new(BIO_s_mem());
 	if(!bio) { cerr<<"dh_generate_key: Failed to allocate BIO_s_mem";exit(1); }
 	if(!PEM_write_bio_PUBKEY(bio,  my_dhkey)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
+	free(buffer);
 	buffer=NULL;
 	long size = BIO_get_mem_data(bio, &buffer);
 	if (size<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
@@ -160,6 +166,7 @@ unsigned int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_ke
 	if (EVP_PKEY_derive_set_peer(derive_ctx, peer_pub_key) <= 0) handleErrors();
 	/* Determine buffer length, by performing a derivation but writing the result nowhere */
 	EVP_PKEY_derive(derive_ctx, NULL, &shared_secretlen);
+	free(shared_secret);
 	shared_secret = (unsigned char*)(malloc(int(shared_secretlen)));	
 	if (!shared_secret) handleErrors();
 	/*Perform again the derivation and store it in shared_secret buffer*/
@@ -176,6 +183,7 @@ unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int s
 	EVP_MD_CTX* hctx;
 	
 	/* Buffer allocation for the digest */
+	free(sessionkey);
 	sessionkey = (unsigned char*) malloc(EVP_MD_size(md));
 	
 	/* Context allocation */
@@ -238,6 +246,7 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	if(1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, AE_tag_len, tag))
 	handleErrors();
 	unsigned int output_len = AE_tag_len + ciphertext_len + AE_iv_len+ aad_len+ sizeof(unsigned int) + sizeof(short);
+	free(output_buffer);
 	output_buffer =(unsigned char *) malloc(output_len);
 	if(!output_buffer) {cerr<<"auth encrypt: output buffer Malloc Error";exit(1);}
 	unsigned int written=0;
@@ -284,6 +293,10 @@ unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, u
 	read+=AE_iv_len;
 	memcpy((unsigned char*) &aad_len, input_buffer + read, sizeof(unsigned int));
 	read+=sizeof(unsigned int);
+	
+	free(output_aad);
+	output_aad=(unsigned char*) malloc(aad_len);
+	
 	memcpy(output_aad, input_buffer + read, aad_len);
 	read+=aad_len;
 	unsigned char* complete_aad=(unsigned char*)malloc(sizeof(short)+aad_len);
@@ -292,6 +305,8 @@ unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, u
 	memcpy(complete_aad+sizeof(short),output_aad,aad_len);
 	
 	memcpy(ciphertext, input_buffer + read, ciphertext_len);
+	free(output_buffer);
+	output_buffer=(unsigned char*)malloc(ciphertext_len);
 	int ret;
 	int len;
 	/* Create and initialise the context */
