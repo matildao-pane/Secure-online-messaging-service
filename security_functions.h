@@ -10,11 +10,6 @@
 #include <string.h> 
 using namespace std;
 
-//DigitalEnvelope parameters
-
-const EVP_CIPHER* DE_cipher = EVP_aes_128_cbc();
-int DE_iv_len = EVP_CIPHER_iv_length(DE_cipher);
-int DE_block_size = EVP_CIPHER_block_size(DE_cipher);
 //Authencrypt parameters
 const EVP_CIPHER* AE_cipher = EVP_aes_128_gcm();
 int AE_iv_len =  EVP_CIPHER_iv_length(AE_cipher);
@@ -29,66 +24,30 @@ void handleErrors(void){
 }
 
 //Digital Signature Sign/Verify
-unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned int clear_size,   unsigned char* signed_buffer){
+unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned int clear_size,   unsigned char* signature_buffer){
 	int ret; // used for return values
-	
-	cout<<"cb:"<<clear_buf<<endl;
 	
 	// create the signature context:
 	EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
 	if(!md_ctx){ cerr << "digsign_sign: EVP_MD_CTX_new returned NULL\n"; exit(1); }
-
-	// allocate buffer for signature:
-	unsigned char*sgnt_buf = (unsigned char*)malloc(EVP_PKEY_size(prvkey));
-	if(!sgnt_buf) { cerr << "digsign_sign: malloc returned NULL (signature too big?)\n"; exit(1); }
-
-	// sign the plaintext:
-	// (perform a single update on the whole plaintext, 
-	// assuming that the plaintext is not huge)
 	ret = EVP_SignInit(md_ctx, md);
 	if(ret == 0){ cerr << "digsign_sign: EVP_SignInit returned " << ret << "\n"; exit(1); }
 	ret = EVP_SignUpdate(md_ctx, clear_buf, clear_size);
 	if(ret == 0){ cerr << "digsign_sign: EVP_SignUpdate returned " << ret << "\n"; exit(1); }
 	unsigned int sgnt_size;
-	ret = EVP_SignFinal(md_ctx, sgnt_buf, &sgnt_size, prvkey);
+	ret = EVP_SignFinal(md_ctx, signature_buffer, &sgnt_size, prvkey);
 	if(ret == 0){ cerr << "digsign_sign: EVP_SignFinal returned " << ret << "\n"; exit(1); }
-	unsigned int signed_buffer_size = sgnt_size+clear_size;
-	free(signed_buffer);
-	signed_buffer = (unsigned char*)malloc(signed_buffer_size);
-	if(!signed_buffer) { cerr << "digsign_sign: malloc returned NULL (signature too big?)\n"; exit(1); }
-	unsigned int written=0;	
-	
-	memcpy(signed_buffer+written, sgnt_buf, sgnt_size );
-	written+= sgnt_size;
-	cout<<"written"<<written<<endl;
-	memcpy(signed_buffer+written,clear_buf, clear_size);
-	
-	cout<<"sb:"<<signed_buffer<<endl;
-
-	// delete the digest from memory:
 	EVP_MD_CTX_free(md_ctx);
-	free(sgnt_buf);
-
-	return signed_buffer_size;
+	cout<<sgnt_size<<endl;
+	return sgnt_size;
 }
 
 
-int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned int input_size, unsigned char*  clear_buf){
+int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned int input_size, unsigned char* signature_buffer, unsigned int sgnt_size){
 	int ret;
-	unsigned int sgnt_size= EVP_PKEY_size(peer_pubkey);	//take the first 4 bytes(unsigned int) of buffer  
-	unsigned int read=0;
-	 
-	if(input_size < sgnt_size) { cerr << "digsign_verify: signed buffer with wrong format\n"; exit(1); }
-	unsigned char* sgnt_buf=(unsigned char*)malloc(sgnt_size);	
-	if(!sgnt_buf) { cerr << "digsign_verify: malloc returned NULL (signature too big?)\n"; exit(1); }	
-	memcpy(sgnt_buf, input_buffer+read, sgnt_size);
-	read+=sgnt_size;
-	int clear_size= input_size-read;
-	if(clear_size==0){ cerr << " digsign_verify: empty message \n"; exit(1); }
-	free(clear_buf);
-	clear_buf=(unsigned char*) malloc(clear_size);
-	memcpy(clear_buf, input_buffer+read, clear_size);
-	
+	//take the first 4 bytes(unsigned int) of buffer  
+	cout<<"cb:"<<input_buffer<<endl;
+	if(input_size==0){ cerr << " digsign_verify: empty message \n"; exit(1); }	
 	// create the signature context:
 	EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
 	if(!md_ctx){ cerr << "Error: EVP_MD_CTX_new returned NULL\n"; exit(1); }
@@ -98,9 +57,9 @@ int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned 
 	// assuming that the plaintext is not huge)
 	ret = EVP_VerifyInit(md_ctx, md);
 	if(ret == 0){ cerr << "Error: EVP_VerifyInit returned " << ret << "\n"; exit(1); }
-	ret = EVP_VerifyUpdate(md_ctx, clear_buf, clear_size);  
+	ret = EVP_VerifyUpdate(md_ctx, input_buffer, input_size);  
 	if(ret == 0){ cerr << "Error: EVP_VerifyUpdate returned " << ret << "\n"; exit(1); }
-	ret = EVP_VerifyFinal(md_ctx, sgnt_buf, sgnt_size, peer_pubkey);
+	ret = EVP_VerifyFinal(md_ctx, signature_buffer, sgnt_size, peer_pubkey);
 	if(ret == -1){ // it is 0 if invalid signature, -1 if some other error, 1 if success.
 	cerr << "Error: EVP_VerifyFinal returned " << ret << " (invalid signature?)\n";  exit(1);
 	}else if(ret == 0){      cerr << "Error: Invalid signature!\n"; return -1;
@@ -108,9 +67,8 @@ int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned 
 
 	// deallocate data:
 	EVP_MD_CTX_free(md_ctx);
-	free(sgnt_buf);
 
-	return clear_size;
+	return 1;
 }
 
 
@@ -145,8 +103,6 @@ EVP_PKEY* dh_generate_key(unsigned char* buffer,unsigned int &buffersize){
 	BIO* bio = BIO_new(BIO_s_mem());
 	if(!bio) { cerr<<"dh_generate_key: Failed to allocate BIO_s_mem";exit(1); }
 	if(!PEM_write_bio_PUBKEY(bio,  my_dhkey)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
-	free(buffer);
-	buffer=NULL;
 	long size = BIO_get_mem_data(bio, &buffer);
 	if (size<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
 	buffersize=(unsigned int)size;

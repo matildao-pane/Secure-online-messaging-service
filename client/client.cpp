@@ -106,18 +106,19 @@ int main(int argc, char *argv[]){
 	int sockfd, portno, ret;
 	struct sockaddr_in serv_addr;
 	struct hostent *server;
+	uint32_t networknumber;
+	unsigned int messagesize;
+	unsigned int recieved=0;
+	if (argc < 4) {	printf("usage %s hostname port username\n", argv[0]);exit(1);}
 	if(strlen(argv[3])>USERNAME_SIZE){cerr<<"Username lenght error";exit(1);}
 	 
-	 char* username = argv[3];
+	char* username = argv[3];
 	char u_name[USERNAME_SIZE];
 	strncpy(u_name, argv[3],USERNAME_SIZE);
 	char filename[] = "users/";
 	strcat(filename,u_name);
 	char endname[] = ".pem";
 	strcat(filename,endname);
-	
-	if (argc < 4) {
-	sprintf("usage %s hostname port username\n", argv[0]);exit(1);}
 	portno = atoi(argv[2]);
 	
 	EVP_PKEY* user_key;
@@ -140,6 +141,9 @@ int main(int argc, char *argv[]){
 	serv_addr.sin_port = htons(portno);
 	if (connect(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) 
 	error("ERROR connecting");
+	
+
+
 	//Send nonce and username
 	unsigned char* mynonce=(unsigned char*)malloc(NONCE_SIZE);
 	if(!mynonce) {cerr<<"mynonce Malloc Error";exit(1);}
@@ -153,43 +157,71 @@ int main(int argc, char *argv[]){
 	memcpy(buffer+NONCE_SIZE,username,strlen(username));
 	cout<<buffer<<endl;
 
-
-//////////
-unsigned char buff[]="ciaone";
-ret=send(sockfd, buff, 7, 0);
-//////////
-
-	unsigned char* outputbuf=(unsigned char* )malloc(1);
-	ret=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),outputbuf);
-
-	cout<<ret<<endl;
-	
-	ret=send(sockfd, outputbuf, ret, 0);
+	unsigned int sgnt_size=EVP_PKEY_size(user_key);
+	unsigned char* outputbuf=(unsigned char* )malloc(sgnt_size);
+	unsigned int signature_size=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),outputbuf);
+	networknumber=htonl(signature_size);
+	ret=send(sockfd, &networknumber, sizeof(uint32_t), 0);
 	if(ret<=0){cerr<<"Error writing to socket";exit(1);}
+	ret=send(sockfd, outputbuf, signature_size, 0);
+	if(ret<=0){cerr<<"Error writing to socket";exit(1);}
+	
+	networknumber=htonl(NONCE_SIZE+strlen(username));
+	ret=send(sockfd, &networknumber, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"Error writing to socket";exit(1);}
+	ret=send(sockfd, buffer, NONCE_SIZE+strlen(username), 0);
+	if(ret<=0){cerr<<"Error writing to socket";exit(1);}
+	
+
+	//FIN QUI ORA VA
 	//Verify server certificate
-	ret=recv(sockfd,buffer,MAX_SIZE,0);
-	if(ret<0){cerr<<"Error reading from socket";exit(1);}
-	long certsize;
-	memcpy((char*)&certsize,buffer,sizeof(long));
-	unsigned char* cert = (unsigned char*) malloc(certsize);
-	int read=(int)sizeof(long);
-	memcpy(cert,buffer+read,certsize);
-	EVP_PKEY* server_pubkey= verify_server_certificate( cert, certsize );
-	read+=certsize;
-	unsigned int signsize;
-	memcpy((char*)&signsize,buffer+read,sizeof(unsigned int));	
-	if(memcmp(buffer+read+sizeof(unsigned int)+signsize,mynonce,NONCE_SIZE)!=0){
+	
+	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);	
+	if(ret<=0){cerr<<"socket receive error"; exit(1);}
+	long certsize=ntohl(networknumber);
+	unsigned char* certbuffer = (unsigned char*) malloc(certsize);
+	if(!certbuffer){cerr<<"cert Malloc Error";exit(1);}
+	while(recieved<certsize){
+		ret = recv(sockfd, certbuffer+recieved, sgnt_size-recieved, 0);	
+		if(ret<0){cerr<<" cert receive error"; exit(1);}
+		recieved+=ret;
+	}
+	EVP_PKEY* server_pubkey= verify_server_certificate( certbuffer, certsize );
+
+
+	//receive message
+	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"client handler: receive error"; exit(1);}
+	messagesize=ntohl(networknumber);
+	if(messagesize>MAX_SIZE){cerr<<"client handler:message too big"; exit(1);}	
+	recieved=0;
+	while(recieved<messagesize){
+		ret = recv(sockfd, buffer+recieved, MAX_SIZE-recieved, 0);	
+		if(ret<0){cerr<<"ecdhkey receive error"; exit(1);}
+		recieved+=ret;
+	}	
+	if(memcmp(buffer,mynonce,NONCE_SIZE)!=0){
 			cerr<<"nonce received is not valid!";
 			exit(1);
 	}
 	free(mynonce);
-	ret= digsign_verify(server_pubkey,buffer+read,ret-read,outputbuf);
+	//receive signature
+	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"receive error"; exit(1);}
+	signature_size=ntohl(networknumber);
+	if(signature_size>sgnt_size){cerr<<"signature too big:"<<signature_size; exit(1);}	
+	while(recieved<signature_size){
+		ret = recv(sockfd, outputbuf+recieved, sgnt_size-recieved, 0);	
+		if(ret<0){cerr<<"signature receive error"; exit(1);}
+		recieved+=ret;
+	}
+	ret= digsign_verify(server_pubkey,buffer,messagesize,outputbuf,signature_size);
 	if(ret<=0){cerr<<"signature is invalid"; exit(1);}
 	unsigned char* servernonce=(unsigned char*) malloc(NONCE_SIZE);
 	if(!servernonce){cerr<<"servernonce Malloc Error";exit(1);}
-	memcpy(servernonce,outputbuf+NONCE_SIZE,NONCE_SIZE);
+	memcpy(servernonce,buffer+NONCE_SIZE,NONCE_SIZE);
 	BIO* mbio= BIO_new(BIO_s_mem());	
-	BIO_write(mbio, outputbuf+2*NONCE_SIZE, ret-2*NONCE_SIZE);
+	BIO_write(mbio, buffer+2*NONCE_SIZE, messagesize-2*NONCE_SIZE);
 	EVP_PKEY* ecdh_server_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
 	BIO_free(mbio);
 	unsigned int keysize;
@@ -205,11 +237,12 @@ ret=send(sockfd, buff, 7, 0);
 	unsigned char* server_sessionkey;
 	ret = dh_generate_session_key( shared_secret, ret , server_sessionkey);
 	free(shared_secret);
-	ret = digsign_sign(user_key, buffer, buf_size, outputbuf);
-	ret=send(sockfd, outputbuf, ret, 0);
+	cout<<"FINE";
+	signature_size = digsign_sign(user_key, buffer, buf_size,outputbuf);
+	ret=send(sockfd, outputbuf, signature_size, 0);
 	unsigned int srv_rcv_counter, srv_counter=0;
 	
-	
+	cout<<"FINE";
 	//
 
 	
