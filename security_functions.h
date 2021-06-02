@@ -23,6 +23,62 @@ void handleErrors(void){
 	abort();
 }
 
+void send_signedmessage(int socket, unsigned int sign_size, unsigned char* signature, unsigned int msg_size, unsigned char* message){
+	int ret;
+	uint32_t size=htonl(sign_size);
+	ret=send(socket, &size, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"send_signedmessage: Error writing to socket";exit(1);}
+	ret=send(socket, signature, sign_size, 0);
+	if(ret<=0){cerr<<"send_signedmessage: Error writing to socket";exit(1);}
+
+	size=htonl(msg_size);
+	ret=send(socket, &size, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"send_signedmessage: Error writing to socket";exit(1);}
+	ret=send(socket, message, msg_size, 0);
+	if(ret<=0){cerr<<"send_signedmessage: Error writing to socket";exit(1);}
+
+}
+
+int receive_signedmessage(int socket, unsigned int &sign_size,unsigned int max_sgnt_size, unsigned char* signature, unsigned int &msg_size, unsigned int max_size, unsigned char* message, bool controlnonce=false, unsigned char* mynonce=NULL, unsigned int noncesize=0){
+	int ret;
+	uint32_t networknumber;
+	//receive signature
+	ret = recv(socket, &networknumber, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"receive_signedmessage: socket receive error"; exit(1);}
+	sign_size=ntohl(networknumber);
+	if(sign_size>max_sgnt_size){cerr<<"signature too big:"<<sign_size; exit(1);}
+	unsigned int recieved=0;	
+	while(recieved<sign_size){
+		ret = recv(socket, signature+recieved, sign_size-recieved, 0);	
+		if(ret<0){cerr<<"signature receive error"; exit(1);}
+		recieved+=ret;
+	}
+
+	//receive message
+	ret = recv(socket, &networknumber, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"socket receive error"; exit(1);}
+	msg_size=ntohl(networknumber);
+	if(msg_size>max_size){cerr<<"client handler:message too big"; exit(1);}	
+	recieved=0;
+	while(recieved<msg_size){
+		ret = recv(socket,  message+recieved, msg_size-recieved, 0);	
+		if(ret<0){cerr<<"message receive error"; exit(1);}
+		recieved+=ret;
+	}
+
+	//verify nonce
+	if(controlnonce)
+		if(memcmp(message,mynonce,noncesize)!=0){
+				cerr<<"nonce received is not valid!";
+				return -1;
+		}
+	return 1;
+}
+
+
+
+
+
 //Digital Signature Sign/Verify
 unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned int clear_size,   unsigned char* signature_buffer){
 	int ret; // used for return values
@@ -46,9 +102,6 @@ unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned i
 int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned int input_size, unsigned char* signature_buffer, unsigned int sgnt_size){
 	int ret;
 	//take the first 4 bytes(unsigned int) of buffer
-	cout<<"input size:"<<input_size<<endl; 
-	cout<<"signature size:"<<sgnt_size<<endl;  
-	cout<<"cb:"<<input_buffer<<endl;
 	if(input_size==0){ cerr << " digsign_verify: empty message \n"; exit(1); }	
 	// create the signature context:
 	EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
@@ -132,7 +185,6 @@ unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int s
 	EVP_MD_CTX* hctx;
 	
 	/* Buffer allocation for the digest */
-	free(sessionkey);
 	sessionkey = (unsigned char*) malloc(EVP_MD_size(md));
 	
 	/* Context allocation */

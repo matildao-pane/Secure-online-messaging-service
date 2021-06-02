@@ -80,7 +80,7 @@ EVP_PKEY* verify_server_certificate( unsigned char* buffer, long buffer_size ){
    // print the successful verification to screen:
    char* tmp = X509_NAME_oneline(X509_get_subject_name(cert), NULL, 0);
    char* tmp2 = X509_NAME_oneline(X509_get_issuer_name(cert), NULL, 0);
-   cout << "Certificate of \"" << tmp << "\" (released by \"" << tmp2 << "\") verified successfully\n";
+   cout << "Certificate of \"" << tmp << "\" (released by \"" << tmp2 << "\") verified successfully"<<endl;
    
    free(tmp);
    free(tmp2);
@@ -108,7 +108,6 @@ int main(int argc, char *argv[]){
 	struct hostent *server;
 	uint32_t networknumber;
 	unsigned int messagesize;
-	unsigned int recieved=0;
 	if (argc < 4) {	printf("usage %s hostname port username\n", argv[0]);exit(1);}
 	if(strlen(argv[3])>USERNAME_SIZE){cerr<<"Username lenght error";exit(1);}
 	 
@@ -155,25 +154,14 @@ int main(int argc, char *argv[]){
 
 	memcpy(buffer,mynonce,NONCE_SIZE);
 	memcpy(buffer+NONCE_SIZE,username,strlen(username));
-	cout<<buffer<<endl;
 	
-	unsigned int sgnt_size=EVP_PKEY_size(user_key);
-	unsigned char* outputbuf=(unsigned char* )malloc(sgnt_size);
-	unsigned int signature_size=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),outputbuf);
-	networknumber=htonl(signature_size);
-	ret=send(sockfd, &networknumber, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"Error writing to socket";exit(1);}
-	ret=send(sockfd, outputbuf, signature_size, 0);
-	if(ret<=0){cerr<<"Error writing to socket";exit(1);}
-	
-	networknumber=htonl(NONCE_SIZE+strlen(username));
-	ret=send(sockfd, &networknumber, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"Error writing to socket";exit(1);}
-	ret=send(sockfd, buffer, NONCE_SIZE+strlen(username), 0);
-	if(ret<=0){cerr<<"Error writing to socket";exit(1);}
+	unsigned int max_sgnt_size=EVP_PKEY_size(user_key);
+	unsigned char* signature_buf=(unsigned char* )malloc(max_sgnt_size);
+	unsigned int signature_size=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),signature_buf);
+	send_signedmessage(sockfd, signature_size, signature_buf, NONCE_SIZE+strlen(username), buffer);
 	
 
-	//FIN QUI ORA VA
+
 	//Verify server certificate
 	
 	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);	
@@ -181,52 +169,32 @@ int main(int argc, char *argv[]){
 	long certsize=ntohl(networknumber);
 	unsigned char* certbuffer = (unsigned char*) malloc(certsize);
 	if(!certbuffer){cerr<<"cert Malloc Error";exit(1);}
-	while(recieved<certsize){
-		ret = recv(sockfd, certbuffer+recieved, sgnt_size-recieved, 0);	
+	unsigned int received=0;
+	while(received<certsize){
+		ret = recv(sockfd, certbuffer+received, certsize-received, 0);	
 		if(ret<0){cerr<<" cert receive error"; exit(1);}
-		recieved+=ret;
+		received+=ret;
 	}
 	EVP_PKEY* server_pubkey= verify_server_certificate( certbuffer, certsize );
+	//receive signedmessage
+	ret=receive_signedmessage(sockfd, signature_size, max_sgnt_size, signature_buf, messagesize, MAX_SIZE, buffer, true, mynonce, NONCE_SIZE);
+	if(ret!=1){cerr<<"receive signmessage: invalid nonce"; exit(1);}
 
-	
-	//receive message
-	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"client handler: receive error"; exit(1);}
-	messagesize=ntohl(networknumber);
-	if(messagesize>MAX_SIZE){cerr<<"client handler:message too big"; exit(1);}	
-	recieved=0;
-	while(recieved<messagesize){
-		ret = recv(sockfd, buffer+recieved, MAX_SIZE-recieved, 0);	
-		if(ret<0){cerr<<"ecdhkey receive error"; exit(1);}
-		recieved+=ret;
-	}	
-	if(memcmp(buffer,mynonce,NONCE_SIZE)!=0){
-			cerr<<"nonce received is not valid!";
-			exit(1);
-	}
-	free(mynonce);
-	printf("OK\n");
-	//receive signature
-	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"receive error"; exit(1);}
-	signature_size=ntohl(networknumber);
-	if(signature_size>sgnt_size){cerr<<"signature too big:"<<signature_size; exit(1);}	
-	while(recieved<signature_size){
-		ret = recv(sockfd, outputbuf+recieved, sgnt_size-recieved, 0);	
-		if(ret<0){cerr<<"signature receive error"; exit(1);}
-		recieved+=ret;
-	}
-	ret= digsign_verify(server_pubkey,buffer,messagesize,outputbuf,signature_size);
+	//verify signature and take server nonce
+	ret= digsign_verify(server_pubkey,buffer,messagesize,signature_buf,signature_size);
 	if(ret<=0){cerr<<"signature is invalid"; exit(1);}
 	unsigned char* servernonce=(unsigned char*) malloc(NONCE_SIZE);
 	if(!servernonce){cerr<<"servernonce Malloc Error";exit(1);}
 	memcpy(servernonce,buffer+NONCE_SIZE,NONCE_SIZE);
+	cout<<"OK"<<endl;
+	//extract ecdh_server_pubkey
 	BIO* mbio= BIO_new(BIO_s_mem());	
-	BIO_write(mbio, buffer+2*NONCE_SIZE, messagesize-2*NONCE_SIZE);
+	BIO_write(mbio, buffer+NONCE_SIZE+NONCE_SIZE, messagesize-NONCE_SIZE-NONCE_SIZE);
 	EVP_PKEY* ecdh_server_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
 	BIO_free(mbio);
-
 	EVP_PKEY* ecdh_priv_key = dh_generate_key();
+
+	//generate ecdh_privkey
 	unsigned char* buffered_ECDHpubkey=NULL;
 	BIO* bio = BIO_new(BIO_s_mem());
 	if(!bio) { cerr<<"dh_generate_key: Failed to allocate BIO_s_mem";exit(1); }
@@ -238,18 +206,22 @@ int main(int argc, char *argv[]){
 	buf_size+= NONCE_SIZE;
 	memcpy(buffer+NONCE_SIZE, buffered_ECDHpubkey, keysize);	
 	buf_size+=keysize;
+	signature_size = digsign_sign(user_key, buffer, buf_size,signature_buf);
+	cout<<"sign_size:"<<signature_size<<endl;
+	cout<<"message_size:"<<buf_size<<endl;
+	send_signedmessage(sockfd, signature_size, signature_buf, buf_size, buffer);
+	free(signature_buf);
+	//FIN QUI VA
 	unsigned char* shared_secret;
-	ret=  dh_derive_shared_secret( ecdh_server_pubkey , ecdh_priv_key , shared_secret);
+	unsigned int slen =  dh_derive_shared_secret( ecdh_server_pubkey , ecdh_priv_key , shared_secret);
 	EVP_PKEY_free(ecdh_server_pubkey);
 	unsigned char* server_sessionkey;
-	ret = dh_generate_session_key( shared_secret, ret , server_sessionkey);
+	ret = dh_generate_session_key( shared_secret, slen , server_sessionkey);
 	free(shared_secret);
-	cout<<"FINE";
-	signature_size = digsign_sign(user_key, buffer, buf_size,outputbuf);
-	ret=send(sockfd, outputbuf, signature_size, 0);
-	unsigned int srv_rcv_counter, srv_counter=0;
 	
-	cout<<"FINE";
+	unsigned int srv_rcv_counter, srv_counter=0;
+		
+	cout<<"FINE"<<endl;
 	//
 
 	

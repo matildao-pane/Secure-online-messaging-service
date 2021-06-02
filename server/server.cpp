@@ -48,11 +48,6 @@ struct user{
 
 
 
-//First server send for each client
-EVP_PKEY* server_send_Certificate_and_ECDHPubKey(int socket, EVP_PKEY* server_key, unsigned char* received_nonce, unsigned char* mynonce){
-
-
-}
 
 //thread function
 void client_handler(int fd, struct user my_user) {
@@ -72,34 +67,13 @@ void client_handler(int fd, struct user my_user) {
 	fclose(file);
 
 	//receive signature
-	unsigned int sgnt_size=EVP_PKEY_size(server_key);
-	unsigned char* signature_buffer=(unsigned char*)malloc(sgnt_size);
-	if(!signature_buffer) {cerr<<"client handler: signature_buffer Malloc Error";exit(1);}
-	ret = recv(fd, &networknumber, sizeof(uint32_t), 0);
-	clientnumber=ntohl(networknumber);
-	if(clientnumber>sgnt_size){cerr<<"client handler:signature too big:"<<clientnumber; exit(1);}	
-	if(ret<=0){cerr<<"client handler: receive error"; exit(1);}
+	unsigned int max_sgnt_size=EVP_PKEY_size(server_key);
+	unsigned char* signature_buffer=(unsigned char* )malloc(max_sgnt_size);
+	unsigned int signature_size, message_size;
+	ret=receive_signedmessage(fd, signature_size,max_sgnt_size, signature_buffer, message_size, MAX_SIZE, buffer);
+	if(ret!=1) {cerr<<"client handler: receive_signedmessage error";exit(1);}
 	
-	while(recieved<clientnumber){
-		ret = recv(fd, signature_buffer+recieved, sgnt_size-recieved, 0);	
-		if(ret<=0){cerr<<"client handler: receive error"; exit(1);}
-		recieved+=ret;
-	}
-	unsigned int signature_size=recieved;
-
-	//receive message
-	ret = recv(fd, &networknumber, sizeof(uint32_t), 0);
-	clientnumber=ntohl(networknumber);
-	if(clientnumber>MAX_SIZE){cerr<<"client handler:message too big"; exit(1);}	
-	if(ret<=0){cerr<<"client handler: receive error"; exit(1);}
-	recieved=0;
-	while(recieved<clientnumber){
-		ret = recv(fd, buffer+recieved, MAX_SIZE-recieved, 0);	
-		if(ret<=0){cerr<<"client handler: receive error"; exit(1);}
-		recieved+=ret;
-	}	
-
-	unsigned int username_size = recieved- NONCE_SIZE;
+	unsigned int username_size = message_size- NONCE_SIZE;
 	if(username_size<=0){ cerr << "client_handler: no nickname \n"; exit(1); }
 	char nickname[username_size+1];	
 	memcpy(nickname, buffer+ NONCE_SIZE, username_size);
@@ -121,10 +95,9 @@ void client_handler(int fd, struct user my_user) {
 	fclose(file);
 	 
 	// verify signature and store received nonce
-	unsigned char* receivednonce=(unsigned char*)malloc(NONCE_SIZE);
-	ret=digsign_verify(client_pubkey,buffer, recieved,signature_buffer,signature_size);
+	ret=digsign_verify(client_pubkey,buffer, message_size,signature_buffer,signature_size);
 	if(ret<0){cerr<<"client handler: invalid signature!"; return;}
-	free(signature_buffer);
+	unsigned char* receivednonce=(unsigned char*)malloc(NONCE_SIZE);
 	memcpy(receivednonce, buffer, NONCE_SIZE);
 	
 	//Send certificate and ecdhpubkey.
@@ -133,11 +106,7 @@ void client_handler(int fd, struct user my_user) {
 	RAND_poll();
 	ret = RAND_bytes((unsigned char*)&mynonce[0],NONCE_SIZE);
 	if(ret!=1){cerr<<"client handler:RAND_bytes Error";exit(1);}
-	//FIN QUI ORA VA, PROBLEMA SEGMENTATION FAULT QUI.	
 	
-
-
-
 	uint32_t size;
 	X509* serverCert;
 	FILE* certfile = fopen("ChatServer_cert.pem", "r");
@@ -155,7 +124,7 @@ void client_handler(int fd, struct user my_user) {
 	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
 	ret=send(fd, certbuffer, certsize, 0);
 	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	BIO_free(bio);
+	
 //Generate ECDH key pair
 	EVP_PKEY* dhpvtkey=dh_generate_key();
 	unsigned char* buffered_ECDHpubkey=NULL;
@@ -164,60 +133,34 @@ void client_handler(int fd, struct user my_user) {
 	if(!PEM_write_bio_PUBKEY(kbio,   dhpvtkey)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
 	long pubkeysize = BIO_get_mem_data(kbio, &buffered_ECDHpubkey);
 	if (pubkeysize<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
-	unsigned int message_size= pubkeysize+NONCE_SIZE*2;
+	message_size= pubkeysize+NONCE_SIZE+NONCE_SIZE;
 //Sign Message
 	unsigned char* message=(unsigned char*) malloc (message_size);
 	if(!message) {cerr<<"server_sendCertificate: message Malloc Error";exit(1);}
 	memcpy(message,receivednonce,NONCE_SIZE);
 	memcpy(message+NONCE_SIZE,mynonce,NONCE_SIZE);
 	memcpy(message+NONCE_SIZE+NONCE_SIZE,buffered_ECDHpubkey,pubkeysize);
-	unsigned char* signature_buf=(unsigned char*)malloc(EVP_PKEY_size(server_key));
-	if(!signature_buf) {cerr<<"server_sendCertificate: signature_buf Malloc Error";exit(1);}	
-	signature_size=digsign_sign(server_key, message, message_size,signature_buf);
-	printf( "ss:%d",signature_size );
-	size=htonl(message_size);
-	ret=send(fd, &size, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	ret=send(fd, message, message_size, 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	free(message);
-	printf( "FINE" );
-	size=htonl(signature_size);
-	ret=send(fd, &size, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	ret=send(fd, signature_buf, signature_size, 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	printf( "FINE" );
+	signature_size=digsign_sign(server_key, message, message_size,signature_buffer);
+
+	send_signedmessage(fd, signature_size, signature_buffer, message_size, message);
+	BIO_free(bio);
 	BIO_free(kbio);
-	free(signature_buf);
-
-	
-
-
-
-
-
 	EVP_PKEY_free(server_key);
-	bool correct_message=false;
+	//DA QUI
 	//Get ecdhpubkey from client
-	/*while(!correct_message){
-		ret = recv(fd, buffer, MAX_SIZE, 0);
-		if(ret<0){cerr<<"client handler: receive error"; exit(1);}
-		//Verify Nonce
-		//receivednonce=buffer;
-		correct_message=true;
-		if (memcmp(receivednonce,mynonce,NONCE_SIZE)!=0){
-			cerr<<"client handler: nonce received is not valid!";
-			correct_message=false;
-		}
-		ret=digsign_verify(client_pubkey,buffer, ret, signature_buffer,signature_size);
-		if(ret<0){"client handler: invalid signature!"; correct_message=false;}
-	}
+	ret=receive_signedmessage(fd, signature_size,max_sgnt_size, signature_buffer, message_size, MAX_SIZE, buffer,true, mynonce,NONCE_SIZE);
+	cout<<"sign_size:"<<signature_size<<endl;
+	cout<<"message_size:"<<message_size<<endl;
+	cout<<buffer<<endl;
+	ret=digsign_verify(client_pubkey,buffer, message_size, signature_buffer,signature_size);
+	if(ret<0){cerr<<"client handler: invalid signature!"; return;}
+	free(signature_buffer);
 	EVP_PKEY_free(client_pubkey);
 	BIO* mbio= BIO_new(BIO_s_mem());	
 	BIO_write(mbio, buffer+NONCE_SIZE, ret-NONCE_SIZE);
 	EVP_PKEY* ecdh_client_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
 	BIO_free(mbio);
+	//FIN QUI VA
 	unsigned char* shared_secret;
 	//compute shared secret and session key
 	ret=dh_derive_shared_secret(ecdh_client_pubkey, dhpvtkey, shared_secret);
@@ -230,9 +173,9 @@ void client_handler(int fd, struct user my_user) {
 	my_user.online=true;
 	//add user to list
 	//send list
-*/
 			
 	close(fd);
+	return;
 }
 
 
