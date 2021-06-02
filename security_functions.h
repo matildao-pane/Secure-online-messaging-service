@@ -45,7 +45,9 @@ unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned i
 
 int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned int input_size, unsigned char* signature_buffer, unsigned int sgnt_size){
 	int ret;
-	//take the first 4 bytes(unsigned int) of buffer  
+	//take the first 4 bytes(unsigned int) of buffer
+	cout<<"input size:"<<input_size<<endl; 
+	cout<<"signature size:"<<sgnt_size<<endl;  
 	cout<<"cb:"<<input_buffer<<endl;
 	if(input_size==0){ cerr << " digsign_verify: empty message \n"; exit(1); }	
 	// create the signature context:
@@ -74,39 +76,30 @@ int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned 
 
 
 // Diffie-Hellman for session key
-EVP_PKEY* dh_generate_key(unsigned char* buffer,unsigned int &buffersize){
+EVP_PKEY* dh_generate_key(){
 
 /*GENERATING MY EPHEMERAL KEY*/
 /* Use built-in parameters */
 	printf("Start: loading standard DH parameters\n");
 	EVP_PKEY *params=NULL;
 
-	printf("\n");
-	printf("Generating ephemeral DH KeyPair\n");
+
 /* Create context for the key generation */
-	EVP_PKEY_CTX *DHctx;
-	if(!(DHctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL))) handleErrors();
-	if(1!=(EVP_PKEY_paramgen_init(DHctx))) handleErrors();
-	if(1!=(EVP_PKEY_CTX_set_ec_paramgen_curve_nid(DHctx, NID_X9_62_prime256v1))) handleErrors();
-	if(1!=(EVP_PKEY_paramgen(DHctx, &params))) handleErrors();
-	EVP_PKEY_CTX_free(DHctx);
-
-
+	EVP_PKEY_CTX *PDHctx;
+	if(NULL==(PDHctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL))) handleErrors();
+	if(1!=(EVP_PKEY_paramgen_init(PDHctx))) handleErrors();
+	if(1!=(EVP_PKEY_CTX_set_ec_paramgen_curve_nid(PDHctx, NID_X9_62_prime256v1))) handleErrors();
+	if(!EVP_PKEY_paramgen(PDHctx, &params)) handleErrors();
+	EVP_PKEY_CTX_free(PDHctx);
 /* Generate a new key */
-	if(!(DHctx = EVP_PKEY_CTX_new(params, NULL))) handleErrors();
+	EVP_PKEY_CTX *DHctx;
+	if(NULL==(DHctx = EVP_PKEY_CTX_new(params, NULL))) handleErrors();
 
 	EVP_PKEY *my_dhkey = NULL;
 	if(1 != EVP_PKEY_keygen_init(DHctx)) handleErrors();
 	if(1 != EVP_PKEY_keygen(DHctx, &my_dhkey)) handleErrors();
-	
+	EVP_PKEY_CTX_free(DHctx);
 /* Write into a buffer*/
-	BIO* bio = BIO_new(BIO_s_mem());
-	if(!bio) { cerr<<"dh_generate_key: Failed to allocate BIO_s_mem";exit(1); }
-	if(!PEM_write_bio_PUBKEY(bio,  my_dhkey)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
-	long size = BIO_get_mem_data(bio, &buffer);
-	if (size<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
-	buffersize=(unsigned int)size;
-	BIO_free(bio);
 	return my_dhkey;
 
 } 

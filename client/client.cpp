@@ -143,7 +143,7 @@ int main(int argc, char *argv[]){
 	error("ERROR connecting");
 	
 
-
+	
 	//Send nonce and username
 	unsigned char* mynonce=(unsigned char*)malloc(NONCE_SIZE);
 	if(!mynonce) {cerr<<"mynonce Malloc Error";exit(1);}
@@ -152,11 +152,11 @@ int main(int argc, char *argv[]){
 	if(ret!=1){cerr<<"RAND_bytes Error";exit(1);}
 	unsigned char* buffer=(unsigned char*) malloc(MAX_SIZE);
 	if(!buffer){cerr<<"buffer Malloc Error";exit(1);}
-	
+
 	memcpy(buffer,mynonce,NONCE_SIZE);
 	memcpy(buffer+NONCE_SIZE,username,strlen(username));
 	cout<<buffer<<endl;
-
+	
 	unsigned int sgnt_size=EVP_PKEY_size(user_key);
 	unsigned char* outputbuf=(unsigned char* )malloc(sgnt_size);
 	unsigned int signature_size=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),outputbuf);
@@ -188,7 +188,7 @@ int main(int argc, char *argv[]){
 	}
 	EVP_PKEY* server_pubkey= verify_server_certificate( certbuffer, certsize );
 
-
+	
 	//receive message
 	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);
 	if(ret<=0){cerr<<"client handler: receive error"; exit(1);}
@@ -205,6 +205,7 @@ int main(int argc, char *argv[]){
 			exit(1);
 	}
 	free(mynonce);
+	printf("OK\n");
 	//receive signature
 	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);
 	if(ret<=0){cerr<<"receive error"; exit(1);}
@@ -224,12 +225,18 @@ int main(int argc, char *argv[]){
 	BIO_write(mbio, buffer+2*NONCE_SIZE, messagesize-2*NONCE_SIZE);
 	EVP_PKEY* ecdh_server_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
 	BIO_free(mbio);
-	unsigned int keysize;
-	EVP_PKEY* ecdh_priv_key = dh_generate_key(outputbuf, keysize); 	//in outputbuf we get ecdh_client_pubkey
+
+	EVP_PKEY* ecdh_priv_key = dh_generate_key();
+	unsigned char* buffered_ECDHpubkey=NULL;
+	BIO* bio = BIO_new(BIO_s_mem());
+	if(!bio) { cerr<<"dh_generate_key: Failed to allocate BIO_s_mem";exit(1); }
+	if(!PEM_write_bio_PUBKEY(bio,  ecdh_priv_key)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
+	long keysize = BIO_get_mem_data(bio, &buffered_ECDHpubkey);
+	if (keysize<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
 	unsigned int buf_size=0;
 	memcpy(buffer, servernonce, NONCE_SIZE);
 	buf_size+= NONCE_SIZE;
-	memcpy(buffer+NONCE_SIZE, outputbuf, keysize);	
+	memcpy(buffer+NONCE_SIZE, buffered_ECDHpubkey, keysize);	
 	buf_size+=keysize;
 	unsigned char* shared_secret;
 	ret=  dh_derive_shared_secret( ecdh_server_pubkey , ecdh_priv_key , shared_secret);

@@ -51,57 +51,7 @@ struct user{
 //First server send for each client
 EVP_PKEY* server_send_Certificate_and_ECDHPubKey(int socket, EVP_PKEY* server_key, unsigned char* received_nonce, unsigned char* mynonce){
 
-	int ret;
-	uint32_t size;
-	//Retrieve Certificate
-	X509* serverCert;
-	FILE* file = fopen("ChatServer_cert.pem", "r");
-	if(!file) { cerr<<"server_sendCertificate: File Open Error";exit(1);}
-	serverCert = PEM_read_X509(file, NULL, NULL, NULL);
-	if(!serverCert) { cerr<<"server_sendCertificate: PEM_read_X509 error";exit(1); }
-	fclose(file);
-	 BIO* bio = BIO_new(BIO_s_mem());
-	if(!bio) { cerr<<"server_sendCertificatee: Failed to allocate BIO_s_mem";exit(1); }
-	if(!PEM_write_bio_X509(bio, serverCert)) { cerr<<"server_sendCertificate: PEM_write_bio_X509 error";exit(1); }
-	unsigned char* certbuffer=NULL;
-	long certsize= BIO_get_mem_data(bio, &certbuffer);
-	size=htonl(certsize);
-	ret=send(socket, &size, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	ret=send(socket, certbuffer, certsize, 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	BIO_free(bio);
-//Generate ECDH key pair
-	unsigned char* buffered_ECDHpubkey=NULL;
-	unsigned int pubkeysize=0;
-	EVP_PKEY* dh_prv_key=dh_generate_key(buffered_ECDHpubkey,pubkeysize);
-	unsigned int message_size=pubkeysize+(NONCE_SIZE*2);
-//Sign Message
-	unsigned char* message=(unsigned char*) malloc (message_size);
-	if(!message) {cerr<<"server_sendCertificate: message Malloc Error";exit(1);}
-	memcpy(message,received_nonce,NONCE_SIZE);
-	memcpy(message+NONCE_SIZE,mynonce,NONCE_SIZE);
-	memcpy(message+(2*NONCE_SIZE),buffered_ECDHpubkey,pubkeysize);
-	free(buffered_ECDHpubkey);
-	unsigned char* signature_buf=(unsigned char*)malloc(EVP_PKEY_size(server_key));
-	if(!signature_buf) {cerr<<"server_sendCertificate: signature_buf Malloc Error";exit(1);}
-	unsigned int signature_size=digsign_sign(server_key, message, message_size,signature_buf);
 
-	size=htonl(message_size);
-	ret=send(socket, &size, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	ret=send(socket, message, message_size, 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	free(message);
-
-	size=htonl(signature_size);
-	ret=send(socket, &size, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	ret=send(socket, signature_buf, signature_size, 0);
-	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
-	free(signature_buf);
-
-	return dh_prv_key;
 }
 
 //thread function
@@ -120,10 +70,11 @@ void client_handler(int fd, struct user my_user) {
 	server_key= PEM_read_PrivateKey(file, NULL, NULL, NULL);
 	if(!server_key) {cerr<<"server_key Error";exit(1);}
 	fclose(file);
-	
+
 	//receive signature
 	unsigned int sgnt_size=EVP_PKEY_size(server_key);
 	unsigned char* signature_buffer=(unsigned char*)malloc(sgnt_size);
+	if(!signature_buffer) {cerr<<"client handler: signature_buffer Malloc Error";exit(1);}
 	ret = recv(fd, &networknumber, sizeof(uint32_t), 0);
 	clientnumber=ntohl(networknumber);
 	if(clientnumber>sgnt_size){cerr<<"client handler:signature too big:"<<clientnumber; exit(1);}	
@@ -146,22 +97,19 @@ void client_handler(int fd, struct user my_user) {
 		ret = recv(fd, buffer+recieved, MAX_SIZE-recieved, 0);	
 		if(ret<=0){cerr<<"client handler: receive error"; exit(1);}
 		recieved+=ret;
-	}
-	//retrieve username and related pubkey
+	}	
+
 	unsigned int username_size = recieved- NONCE_SIZE;
 	if(username_size<=0){ cerr << "client_handler: no nickname \n"; exit(1); }
-	cout<<"username_size: "<<username_size<<endl;
 	char nickname[username_size+1];	
 	memcpy(nickname, buffer+ NONCE_SIZE, username_size);
 	nickname[username_size]='\0';
-	printf( "%s\n",buffer+NONCE_SIZE );
-	cout<<"nickname: "<<nickname<<endl;
 	strncpy(my_user.nickname, nickname, USERNAME_SIZE);
 	char filename[] = "pubkeys/";
 	strcat(filename,nickname);
 	char endname[] = ".pem";
 	strcat(filename,endname);
-	cout<<"filename: "<<filename<<endl;
+	
 	//Get user pubkey
 	EVP_PKEY* client_pubkey;
 	file = fopen( filename, "r");
@@ -186,12 +134,73 @@ void client_handler(int fd, struct user my_user) {
 	ret = RAND_bytes((unsigned char*)&mynonce[0],NONCE_SIZE);
 	if(ret!=1){cerr<<"client handler:RAND_bytes Error";exit(1);}
 	//FIN QUI ORA VA, PROBLEMA SEGMENTATION FAULT QUI.	
-	EVP_PKEY* dhpvtkey=server_send_Certificate_and_ECDHPubKey(fd, server_key, receivednonce, mynonce);
+	
+
+
+
+	uint32_t size;
+	X509* serverCert;
+	FILE* certfile = fopen("ChatServer_cert.pem", "r");
+	if(!certfile) { cerr<<"server_sendCertificate: File Open Error";exit(1);}
+	serverCert = PEM_read_X509(file, NULL, NULL, NULL);
+	if(!serverCert) { cerr<<"server_sendCertificate: PEM_read_X509 error";exit(1); }
+	fclose(certfile);
+	 BIO* bio = BIO_new(BIO_s_mem());
+	if(!bio) { cerr<<"server_sendCertificatee: Failed to allocate BIO_s_mem";exit(1); }
+	if(!PEM_write_bio_X509(bio, serverCert)) { cerr<<"server_sendCertificate: PEM_write_bio_X509 error";exit(1); }
+	unsigned char* certbuffer=NULL;
+	long certsize= BIO_get_mem_data(bio, &certbuffer);
+	size=htonl(certsize);
+	ret=send(fd, &size, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
+	ret=send(fd, certbuffer, certsize, 0);
+	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
+	BIO_free(bio);
+//Generate ECDH key pair
+	EVP_PKEY* dhpvtkey=dh_generate_key();
+	unsigned char* buffered_ECDHpubkey=NULL;
+	BIO* kbio = BIO_new(BIO_s_mem());
+	if(!kbio) { cerr<<"dh_generate_key: Failed to allocate BIO_s_mem";exit(1); }
+	if(!PEM_write_bio_PUBKEY(kbio,   dhpvtkey)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
+	long pubkeysize = BIO_get_mem_data(kbio, &buffered_ECDHpubkey);
+	if (pubkeysize<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
+	unsigned int message_size= pubkeysize+NONCE_SIZE*2;
+//Sign Message
+	unsigned char* message=(unsigned char*) malloc (message_size);
+	if(!message) {cerr<<"server_sendCertificate: message Malloc Error";exit(1);}
+	memcpy(message,receivednonce,NONCE_SIZE);
+	memcpy(message+NONCE_SIZE,mynonce,NONCE_SIZE);
+	memcpy(message+NONCE_SIZE+NONCE_SIZE,buffered_ECDHpubkey,pubkeysize);
+	unsigned char* signature_buf=(unsigned char*)malloc(EVP_PKEY_size(server_key));
+	if(!signature_buf) {cerr<<"server_sendCertificate: signature_buf Malloc Error";exit(1);}	
+	signature_size=digsign_sign(server_key, message, message_size,signature_buf);
+	printf( "ss:%d",signature_size );
+	size=htonl(message_size);
+	ret=send(fd, &size, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
+	ret=send(fd, message, message_size, 0);
+	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
+	free(message);
+	printf( "FINE" );
+	size=htonl(signature_size);
+	ret=send(fd, &size, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
+	ret=send(fd, signature_buf, signature_size, 0);
+	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
+	printf( "FINE" );
+	BIO_free(kbio);
+	free(signature_buf);
+
+	
+
+
+
+
+
 	EVP_PKEY_free(server_key);
 	bool correct_message=false;
-	cout<<"FINE";
 	//Get ecdhpubkey from client
-	while(!correct_message){
+	/*while(!correct_message){
 		ret = recv(fd, buffer, MAX_SIZE, 0);
 		if(ret<0){cerr<<"client handler: receive error"; exit(1);}
 		//Verify Nonce
@@ -221,8 +230,7 @@ void client_handler(int fd, struct user my_user) {
 	my_user.online=true;
 	//add user to list
 	//send list
-	cout<<"FINE";
-	
+*/
 			
 	close(fd);
 }
