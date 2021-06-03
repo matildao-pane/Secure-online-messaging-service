@@ -78,7 +78,7 @@ void client_handler(int fd, struct user my_user) {
 	char nickname[username_size+1];	
 	memcpy(nickname, buffer+ NONCE_SIZE, username_size);
 	nickname[username_size]='\0';
-	strncpy(my_user.nickname, nickname, USERNAME_SIZE);
+	strncpy(my_user.nickname, nickname, username_size+1);
 	char filename[] = "pubkeys/";
 	strcat(filename,nickname);
 	char endname[] = ".pem";
@@ -119,6 +119,7 @@ void client_handler(int fd, struct user my_user) {
 	if(!PEM_write_bio_X509(bio, serverCert)) { cerr<<"server_sendCertificate: PEM_write_bio_X509 error";exit(1); }
 	unsigned char* certbuffer=NULL;
 	long certsize= BIO_get_mem_data(bio, &certbuffer);
+	cout<<"Certificate Size: "<<certsize<<endl;
 	size=htonl(certsize);
 	ret=send(fd, &size, sizeof(uint32_t), 0);
 	if(ret<=0){cerr<<"server_sendCertificate:Error writing to socket";exit(1);}
@@ -146,34 +147,62 @@ void client_handler(int fd, struct user my_user) {
 	BIO_free(bio);
 	BIO_free(kbio);
 	EVP_PKEY_free(server_key);
-	//DA QUI
 	//Get ecdhpubkey from client
 	ret=receive_signedmessage(fd, signature_size,max_sgnt_size, signature_buffer, message_size, MAX_SIZE, buffer,true, mynonce,NONCE_SIZE);
-	cout<<"sign_size:"<<signature_size<<endl;
-	cout<<"message_size:"<<message_size<<endl;
-	cout<<buffer<<endl;
 	ret=digsign_verify(client_pubkey,buffer, message_size, signature_buffer,signature_size);
 	if(ret<0){cerr<<"client handler: invalid signature!"; return;}
 	free(signature_buffer);
 	EVP_PKEY_free(client_pubkey);
 	BIO* mbio= BIO_new(BIO_s_mem());	
-	BIO_write(mbio, buffer+NONCE_SIZE, ret-NONCE_SIZE);
+	BIO_write(mbio, buffer+NONCE_SIZE, message_size-NONCE_SIZE);
 	EVP_PKEY* ecdh_client_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
-	BIO_free(mbio);
-	//FIN QUI VA
-	unsigned char* shared_secret;
+	
+	//unsigned char* shared_secret;
 	//compute shared secret and session key
-	ret=dh_derive_shared_secret(ecdh_client_pubkey, dhpvtkey, shared_secret);
+	//ret=dh_derive_shared_secret(ecdh_client_pubkey, dhpvtkey, shared_secret);
+/////////
+//FIN QUI VA
+	size_t slen;
+	EVP_PKEY_CTX *derive_ctx;
+	derive_ctx = EVP_PKEY_CTX_new(dhpvtkey, NULL);
+	if (!derive_ctx) handleErrors();
+	if (EVP_PKEY_derive_init(derive_ctx) <= 0) handleErrors();
+	/*Setting the peer with its pubkey*/
+	if (EVP_PKEY_derive_set_peer(derive_ctx, ecdh_client_pubkey) <= 0) handleErrors();
+	/* Determine buffer length, by performing a derivation but writing the result nowhere */
+	EVP_PKEY_derive(derive_ctx, NULL, &slen);
+	unsigned char* shared_secret = (unsigned char*)(malloc(int(slen)));	
+	if (!shared_secret) {cerr<<"MALLOC ERR";exit(1);}
+	/*Perform again the derivation and store it in shared_secret buffer*/
+	if (EVP_PKEY_derive(derive_ctx, shared_secret, &slen) <= 0) {cerr<<"ERR";exit(1);}
+	EVP_PKEY_CTX_free(derive_ctx);
+////////
+	BIO_free(mbio);
 	EVP_PKEY_free(ecdh_client_pubkey);
 	EVP_PKEY_free(dhpvtkey);
-	unsigned char* sessionkey;
-	ret=dh_generate_session_key(shared_secret, ret, sessionkey);
+	unsigned char* sessionkey=(unsigned char*) malloc(EVP_MD_size(md));
+	if (!sessionkey) {cerr<<"sessionkey MALLOC ERR";exit(1);}
+	ret=dh_generate_session_key(shared_secret, (unsigned int)slen, sessionkey);
 	free(shared_secret);
 	unsigned int send_counter,recv_counter=0;
 	my_user.online=true;
+	////////////
+	unsigned char* encrypted_buffer;
+	unsigned char* aad=(unsigned char* )malloc(sizeof(unsigned int));
+	if (!aad) {cerr<<"sessionkey MALLOC ERR";exit(1);}
+	memcpy(aad,&send_counter,sizeof(unsigned int));
+	unsigned int msgsiz=auth_encrypt(1,aad, sizeof(unsigned int), (unsigned char* )my_user.nickname, strlen(my_user.nickname), sessionkey, encrypted_buffer);
+	size=htonl(msgsiz);
+	cout<<"Sent MSG Size: "<<msgsiz<<endl;
+	ret=send(fd, &size, sizeof(uint32_t), 0);
+	if(ret<=0){cerr<<"server_:Error writing to socket";exit(1);}
+	ret=send(fd, encrypted_buffer, msgsiz, 0);
+	if(ret<=0){cerr<<"server_:Error writing to socket";exit(1);}
+	send_counter++;	
+	////////////
 	//add user to list
 	//send list
-			
+	free(sessionkey);	
 	close(fd);
 	return;
 }

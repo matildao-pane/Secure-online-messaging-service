@@ -26,12 +26,14 @@ void handleErrors(void){
 void send_signedmessage(int socket, unsigned int sign_size, unsigned char* signature, unsigned int msg_size, unsigned char* message){
 	int ret;
 	uint32_t size=htonl(sign_size);
+	cout<<"Sent Sign Size: "<<sign_size<<endl;
 	ret=send(socket, &size, sizeof(uint32_t), 0);
 	if(ret<=0){cerr<<"send_signedmessage: Error writing to socket";exit(1);}
 	ret=send(socket, signature, sign_size, 0);
 	if(ret<=0){cerr<<"send_signedmessage: Error writing to socket";exit(1);}
 
 	size=htonl(msg_size);
+	cout<<"Sent Msg Size: "<<msg_size<<endl;
 	ret=send(socket, &size, sizeof(uint32_t), 0);
 	if(ret<=0){cerr<<"send_signedmessage: Error writing to socket";exit(1);}
 	ret=send(socket, message, msg_size, 0);
@@ -47,6 +49,7 @@ int receive_signedmessage(int socket, unsigned int &sign_size,unsigned int max_s
 	if(ret<=0){cerr<<"receive_signedmessage: socket receive error"; exit(1);}
 	sign_size=ntohl(networknumber);
 	if(sign_size>max_sgnt_size){cerr<<"signature too big:"<<sign_size; exit(1);}
+	cout<<"Received Sign Size: "<<sign_size<<endl;
 	unsigned int recieved=0;	
 	while(recieved<sign_size){
 		ret = recv(socket, signature+recieved, sign_size-recieved, 0);	
@@ -58,7 +61,8 @@ int receive_signedmessage(int socket, unsigned int &sign_size,unsigned int max_s
 	ret = recv(socket, &networknumber, sizeof(uint32_t), 0);
 	if(ret<=0){cerr<<"socket receive error"; exit(1);}
 	msg_size=ntohl(networknumber);
-	if(msg_size>max_size){cerr<<"client handler:message too big"; exit(1);}	
+	if(msg_size>max_size){cerr<<"client handler:message too big"; exit(1);}
+	cout<<"Received Msg Size: "<<msg_size<<endl;	
 	recieved=0;
 	while(recieved<msg_size){
 		ret = recv(socket,  message+recieved, msg_size-recieved, 0);	
@@ -157,6 +161,8 @@ EVP_PKEY* dh_generate_key(){
 
 } 
 
+/*
+PER FORZA NEL MAIN, DA SEGMENTATION FAULT (?)
 
 unsigned int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_key, unsigned char *shared_secret){
 	size_t shared_secretlen;
@@ -164,41 +170,43 @@ unsigned int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_ke
 	derive_ctx = EVP_PKEY_CTX_new(my_prv_key, NULL);
 	if (!derive_ctx) handleErrors();
 	if (EVP_PKEY_derive_init(derive_ctx) <= 0) handleErrors();
-	/*Setting the peer with its pubkey*/
+	/*Setting the peer with its pubkey
 	if (EVP_PKEY_derive_set_peer(derive_ctx, peer_pub_key) <= 0) handleErrors();
-	/* Determine buffer length, by performing a derivation but writing the result nowhere */
+	/* Determine buffer length, by performing a derivation but writing the result nowhere 
 	EVP_PKEY_derive(derive_ctx, NULL, &shared_secretlen);
-	free(shared_secret);
 	shared_secret = (unsigned char*)(malloc(int(shared_secretlen)));	
 	if (!shared_secret) handleErrors();
-	/*Perform again the derivation and store it in shared_secret buffer*/
+	/*Perform again the derivation and store it in shared_secret buffer
 	if (EVP_PKEY_derive(derive_ctx, shared_secret, &shared_secretlen) <= 0) handleErrors();
 	EVP_PKEY_CTX_free(derive_ctx);
-	
 	return (unsigned int)shared_secretlen;
 }
 
-
+*/
 unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int shared_secretlen, unsigned char *sessionkey){
 	unsigned int sessionkey_len;
 	int ret;
 	EVP_MD_CTX* hctx;
-	
+	cout<<"CP1 "<<endl;
 	/* Buffer allocation for the digest */
-	sessionkey = (unsigned char*) malloc(EVP_MD_size(md));
-	
+	//sessionkey = (unsigned char*) malloc(EVP_MD_size(md));
 	/* Context allocation */
 	hctx= EVP_MD_CTX_new();
 	if(!hctx) {cerr<<"dh_generate_session_key: EVP_MD_CTX_new Error";exit(1);}
+	cout<<"CP2 "<<endl;
 	/* Hashing (initialization + single update + finalization */
 	ret=EVP_DigestInit(hctx, md);
 	if(ret!=1){cerr<<"dh_generate_session_key: EVP_DigestInit Error";;exit(1);}
+	cout<<"CP3 "<<endl;
 	ret=EVP_DigestUpdate(hctx, shared_secret, shared_secretlen);
 	if(ret!=1){cerr<<"dh_generate_session_key: EVP_DigestUpdate Error";;exit(1);}
+	cout<<"CP4 "<<endl;
 	ret=EVP_DigestFinal(hctx, sessionkey, &sessionkey_len);
 	if(ret!=1){cerr<<"dh_generate_session_key: EVP_DigestFinal Error";;exit(1);}
+	cout<<"CP5 "<<endl;
 	/* Context deallocation */
 	EVP_MD_CTX_free(hctx);
+	cout<<"CP6 "<<endl;
 	return sessionkey_len;
 }
 
@@ -223,7 +231,7 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	if(!tag) {cerr<<"auth encrypt: tag Malloc Error";exit(1);}
 	unsigned char* complete_aad=(unsigned char*)malloc(sizeof(short)+aad_len);
 	if(!complete_aad) {cerr<<"auth encrypt: true_aad Malloc Error";exit(1);}
-	memcpy(complete_aad,(unsigned char*) &opcode,sizeof(short));
+	memcpy(complete_aad,&opcode,sizeof(short));
 	memcpy(complete_aad+sizeof(short),aad,aad_len);
 	// Create and initialise the context
 	if(!(ctx = EVP_CIPHER_CTX_new()))
@@ -247,17 +255,16 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	if(1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, AE_tag_len, tag))
 	handleErrors();
 	unsigned int output_len = AE_tag_len + ciphertext_len + AE_iv_len+ aad_len+ sizeof(unsigned int) + sizeof(short);
-	free(output_buffer);
 	output_buffer =(unsigned char *) malloc(output_len);
 	if(!output_buffer) {cerr<<"auth encrypt: output buffer Malloc Error";exit(1);}
 	unsigned int written=0;
-	memcpy(output_buffer, (unsigned char*) &opcode, sizeof(short));
+	memcpy(output_buffer,  (char *)&opcode, sizeof(short));
 	written+=sizeof(short);
 	memcpy(output_buffer + written, tag, AE_tag_len);
 	written+=AE_tag_len;
 	memcpy(output_buffer + written, iv, AE_iv_len);
 	written+=AE_iv_len;
-	memcpy(output_buffer + written, (unsigned char*) &aad_len, sizeof(unsigned int));
+	memcpy(output_buffer + written, (char *)&aad_len, sizeof(unsigned int));
 	written+=sizeof(unsigned int);
 	memcpy(output_buffer + written, aad, aad_len);
 	written+=aad_len;
@@ -271,45 +278,46 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	return written;
 	}
 
-unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, short &opcode, unsigned char *output_aad, unsigned int &aad_len, unsigned char *output_buffer)
+unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, short &opcode, unsigned char *output_aad, unsigned int &aad_len, unsigned char* output_buffer)
 {
 	
 	EVP_CIPHER_CTX *ctx;
 	unsigned int read=0;
-	memcpy((unsigned char*) &opcode, input_buffer , sizeof(short));
+	opcode=*(short*)(input_buffer);
+	cout<<opcode<<endl;
 	read+=sizeof(short);
-	
-	if(input_len <= read) { cerr << "Error auth decrypt: encrypted buffer with wrong format\n"; exit(1); }
-	unsigned int ciphertext_len = input_len - read;
 	unsigned int output_len = 0;
 	unsigned char *iv = (unsigned char *)malloc(AE_iv_len);
 	if(!iv) {cerr<<"auth decrypt: iv Malloc Error";exit(1);}
-	unsigned char* ciphertext = (unsigned char *)malloc(ciphertext_len);
-	if(!ciphertext) {cerr<<"auth decrypt: ciphertext Malloc Error";exit(1);}
 	unsigned char* tag = (unsigned char *)malloc(AE_tag_len);
 	if(!tag) {cerr<<"auth decrypt: tag Malloc Error";exit(1);}
 	memcpy(tag, input_buffer + read, AE_tag_len);
 	read+=AE_tag_len;
 	memcpy(iv, input_buffer + read, AE_iv_len);
 	read+=AE_iv_len;
-	memcpy((unsigned char*) &aad_len, input_buffer + read, sizeof(unsigned int));
+	cout<<read<<endl;
+	if(input_len <= read) { cerr << "Error auth decrypt: encrypted buffer with wrong format\n"; exit(1); }
+	aad_len=*(unsigned int*)(input_buffer+read);
 	read+=sizeof(unsigned int);
-	
-	free(output_aad);
+	cout<<"VA1"<<endl;
+	cout<<aad_len<<endl;
 	output_aad=(unsigned char*) malloc(aad_len);
-	
+	if(!tag) {cerr<<"auth decrypt: aad Malloc Error";exit(1);}
 	memcpy(output_aad, input_buffer + read, aad_len);
 	read+=aad_len;
 	unsigned char* complete_aad=(unsigned char*)malloc(sizeof(short)+aad_len);
 	if(!complete_aad) {cerr<<"auth encrypt: true_aad Malloc Error";exit(1);}
-	memcpy(complete_aad,(unsigned char*) &opcode,sizeof(short));
+	memcpy(complete_aad, &opcode,sizeof(short));
 	memcpy(complete_aad+sizeof(short),output_aad,aad_len);
-	
+	unsigned int ciphertext_len = input_len - read;
+	unsigned char* ciphertext = (unsigned char *)malloc(ciphertext_len);
+	if(!ciphertext) {cerr<<"auth decrypt: ciphertext Malloc Error";exit(1);}
 	memcpy(ciphertext, input_buffer + read, ciphertext_len);
-	free(output_buffer);
+	cout<<"VA4"<<endl;
 	output_buffer=(unsigned char*)malloc(ciphertext_len);
 	int ret;
 	int len;
+	cout<<"VA5"<<endl;
 	/* Create and initialise the context */
 	if(!(ctx = EVP_CIPHER_CTX_new()))
 	handleErrors();
@@ -330,7 +338,7 @@ unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, u
 	* anything else is a failure - the plaintext is not trustworthy.
 	*/
 	ret = EVP_DecryptFinal(ctx, output_buffer + output_len, &len);
-
+	cout<<"VA3"<<endl;
 	/* Clean up */
 	EVP_CIPHER_CTX_cleanup(ctx);
 	free(tag);

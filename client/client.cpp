@@ -167,6 +167,7 @@ int main(int argc, char *argv[]){
 	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);	
 	if(ret<=0){cerr<<"socket receive error"; exit(1);}
 	long certsize=ntohl(networknumber);
+	cout<<"Certificate Size: "<<certsize<<endl;
 	unsigned char* certbuffer = (unsigned char*) malloc(certsize);
 	if(!certbuffer){cerr<<"cert Malloc Error";exit(1);}
 	unsigned int received=0;
@@ -207,20 +208,60 @@ int main(int argc, char *argv[]){
 	memcpy(buffer+NONCE_SIZE, buffered_ECDHpubkey, keysize);	
 	buf_size+=keysize;
 	signature_size = digsign_sign(user_key, buffer, buf_size,signature_buf);
-	cout<<"sign_size:"<<signature_size<<endl;
-	cout<<"message_size:"<<buf_size<<endl;
 	send_signedmessage(sockfd, signature_size, signature_buf, buf_size, buffer);
 	free(signature_buf);
 	//FIN QUI VA
+/*
 	unsigned char* shared_secret;
 	unsigned int slen =  dh_derive_shared_secret( ecdh_server_pubkey , ecdh_priv_key , shared_secret);
+*/
+	size_t slen;
+	EVP_PKEY_CTX *derive_ctx;
+	derive_ctx = EVP_PKEY_CTX_new(ecdh_priv_key, NULL);
+	if (!derive_ctx) handleErrors();
+	if (EVP_PKEY_derive_init(derive_ctx) <= 0) handleErrors();
+	/*Setting the peer with its pubkey*/
+	if (EVP_PKEY_derive_set_peer(derive_ctx, ecdh_server_pubkey) <= 0) handleErrors();
+	/* Determine buffer length, by performing a derivation but writing the result nowhere */
+	EVP_PKEY_derive(derive_ctx, NULL, &slen);
+	unsigned char* shared_secret = (unsigned char*)(malloc(int(slen)));	
+	if (!shared_secret) {cerr<<"MALLOC ERR";exit(1);}
+	/*Perform again the derivation and store it in shared_secret buffer*/
+	if (EVP_PKEY_derive(derive_ctx, shared_secret, &slen) <= 0) {cerr<<"ERR";exit(1);}
+	EVP_PKEY_CTX_free(derive_ctx);
+/////////
 	EVP_PKEY_free(ecdh_server_pubkey);
-	unsigned char* server_sessionkey;
-	ret = dh_generate_session_key( shared_secret, slen , server_sessionkey);
+	EVP_PKEY_free(ecdh_priv_key);
+	unsigned char* server_sessionkey=(unsigned char*) malloc(EVP_MD_size(md));
+	ret = dh_generate_session_key( shared_secret, (unsigned int)slen , server_sessionkey);
 	free(shared_secret);
 	
 	unsigned int srv_rcv_counter, srv_counter=0;
-		
+	short opcode;
+/////////
+	//DA PROVARE
+	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);	
+	if(ret<=0){cerr<<"socket receive error"; exit(1);}
+	unsigned int msgsize=ntohl(networknumber);
+	cout<<"Test Recv Size: "<<msgsize<<endl;
+	received=0;
+	while(received<msgsize){
+		ret = recv(sockfd, buffer+received, msgsize-received, 0);	
+		if(ret<0){cerr<<"test msg receive error"; exit(1);}
+		received+=ret;
+	}
+	cout<<"Recv MSG Size: "<<received<<endl;
+	unsigned char* outbuf;
+	unsigned char* outaad;
+	unsigned int aadlen;
+	unsigned int msglen;
+	msglen= auth_decrypt(buffer, msgsize, server_sessionkey,opcode, outaad, aadlen, outbuf);
+	cout<<"opcode: "<<opcode<<endl;	
+	cout<<"Recv aad Size: "<<aadlen<<endl;
+	cout<<"aad: "<<outaad<<endl;
+	cout<<"Recv encr Size: "<<msglen<<endl;
+	cout<<"outbuf: "<<outbuf<<endl;
+/////////
 	cout<<"FINE"<<endl;
 	//
 
