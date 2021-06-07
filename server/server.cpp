@@ -45,9 +45,18 @@ struct user{
 	bool online=false;
 };
 
+std::vector<struct user> users_list;
 
-
-
+unsigned int get_userlist(char* mynickname, unsigned char* buffer){
+	unsigned int written=0;
+	for(int i=0; i<users_list.size(); i++){
+		if((strcmp(users_list[i].nickname,mynickname)!=0) && users_list[i].online){
+			memcpy(buffer+written,users_list[i].nickname,strlen(users_list[i].nickname+1));
+			written+=strlen(users_list[i].nickname+1);
+		}
+	}
+	return written;
+}
 
 //thread function
 void client_handler(int fd, struct user my_user) {
@@ -58,6 +67,10 @@ void client_handler(int fd, struct user my_user) {
 	unsigned int recieved=0;
 	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
 	if(!buffer){cerr<<"client handler: buffer Malloc Error";exit(1);}
+	unsigned char* message = (unsigned char*)malloc(MAX_SIZE);
+	if(!message){cerr<<"client handler: message Malloc Error";exit(1);}
+	unsigned char* aad = (unsigned char*)malloc(MAX_SIZE);
+	if(!aad){cerr<<"client handler: aad Malloc Error";exit(1);}
 	//retrieve server key
 	EVP_PKEY* server_key;
 	FILE* file = fopen("ChatServer_key.pem", "r");
@@ -67,23 +80,21 @@ void client_handler(int fd, struct user my_user) {
 	fclose(file);
 
 	//receive signature
-	unsigned int max_sgnt_size=EVP_PKEY_size(server_key);
-	unsigned char* signature_buffer=(unsigned char* )malloc(max_sgnt_size);
-	unsigned int signature_size, message_size;
-	ret=receive_signedmessage(fd, signature_size,max_sgnt_size, signature_buffer, message_size, MAX_SIZE, buffer);
-	if(ret!=1) {cerr<<"client handler: receive_signedmessage error";exit(1);}
-	
-	unsigned int username_size = message_size- NONCE_SIZE;
+	unsigned int message_size=receive_message(fd, MAX_SIZE, buffer);
+	if(message_size==0) {cerr<<"client handler: receive signed message error";exit(1);}
+
+	unsigned int sgnt_size=*(unsigned int*)buffer;
+	sgnt_size+=sizeof(unsigned int);
+	unsigned int username_size = message_size-sgnt_size- NONCE_SIZE;
 	if(username_size<=0){ cerr << "client_handler: no nickname \n"; exit(1); }
 	char nickname[username_size+1];	
-	memcpy(nickname, buffer+ NONCE_SIZE, username_size);
+	memcpy(nickname, buffer+sgnt_size+NONCE_SIZE, username_size);
 	nickname[username_size]='\0';
 	strncpy(my_user.nickname, nickname, username_size+1);
 	char filename[] = "pubkeys/";
 	strcat(filename,nickname);
 	char endname[] = ".pem";
 	strcat(filename,endname);
-	
 	//Get user pubkey
 	EVP_PKEY* client_pubkey;
 	file = fopen( filename, "r");
@@ -95,10 +106,11 @@ void client_handler(int fd, struct user my_user) {
 	fclose(file);
 	 
 	// verify signature and store received nonce
-	ret=digsign_verify(client_pubkey,buffer, message_size,signature_buffer,signature_size);
+	//ret=digsign_verify(client_pubkey,buffer, message_size,signature_buffer,signature_size);
+	ret=digsign_verify(client_pubkey,buffer, message_size, message);
 	if(ret<0){cerr<<"client handler: invalid signature!"; return;}
 	unsigned char* receivednonce=(unsigned char*)malloc(NONCE_SIZE);
-	memcpy(receivednonce, buffer, NONCE_SIZE);
+	memcpy(receivednonce, message, NONCE_SIZE);
 	
 	//Send certificate and ecdhpubkey.
 	unsigned char* mynonce=(unsigned char*)malloc(NONCE_SIZE);
@@ -136,32 +148,30 @@ void client_handler(int fd, struct user my_user) {
 	if (pubkeysize<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
 	message_size= pubkeysize+NONCE_SIZE+NONCE_SIZE;
 //Sign Message
-	unsigned char* message=(unsigned char*) malloc (message_size);
-	if(!message) {cerr<<"server_sendCertificate: message Malloc Error";exit(1);}
 	memcpy(message,receivednonce,NONCE_SIZE);
 	memcpy(message+NONCE_SIZE,mynonce,NONCE_SIZE);
 	memcpy(message+NONCE_SIZE+NONCE_SIZE,buffered_ECDHpubkey,pubkeysize);
-	signature_size=digsign_sign(server_key, message, message_size,signature_buffer);
-
-	send_signedmessage(fd, signature_size, signature_buffer, message_size, message);
+	unsigned int signed_size=digsign_sign(server_key, message, message_size,buffer);
+	free(receivednonce);
+	send_message(fd, signed_size, buffer);
 	BIO_free(bio);
 	BIO_free(kbio);
 	EVP_PKEY_free(server_key);
 	//Get ecdhpubkey from client
-	ret=receive_signedmessage(fd, signature_size,max_sgnt_size, signature_buffer, message_size, MAX_SIZE, buffer,true, mynonce,NONCE_SIZE);
-	ret=digsign_verify(client_pubkey,buffer, message_size, signature_buffer,signature_size);
-	if(ret<0){cerr<<"client handler: invalid signature!"; return;}
-	free(signature_buffer);
+	signed_size=receive_message(fd, MAX_SIZE, buffer);
+	unsigned int signature_size=*(unsigned int*)buffer;
+	signature_size+=sizeof(unsigned int);
+	if(memcmp(buffer+signature_size,mynonce,NONCE_SIZE)!=0){
+				cerr<<"nonce received is not valid!";
+				exit(1);}
+	message_size= digsign_verify(client_pubkey,buffer,signed_size,message);
+	if(message_size<=0){cerr<<"client handler: signed message error!"; return;}
 	EVP_PKEY_free(client_pubkey);
 	BIO* mbio= BIO_new(BIO_s_mem());	
-	BIO_write(mbio, buffer+NONCE_SIZE, message_size-NONCE_SIZE);
+	BIO_write(mbio, message+NONCE_SIZE, message_size-NONCE_SIZE);
 	EVP_PKEY* ecdh_client_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
 	
-	//unsigned char* shared_secret;
-	//compute shared secret and session key
-	//ret=dh_derive_shared_secret(ecdh_client_pubkey, dhpvtkey, shared_secret);
-/////////
-//FIN QUI VA
+
 	size_t slen;
 	EVP_PKEY_CTX *derive_ctx;
 	derive_ctx = EVP_PKEY_CTX_new(dhpvtkey, NULL);
@@ -176,7 +186,7 @@ void client_handler(int fd, struct user my_user) {
 	/*Perform again the derivation and store it in shared_secret buffer*/
 	if (EVP_PKEY_derive(derive_ctx, shared_secret, &slen) <= 0) {cerr<<"ERR";exit(1);}
 	EVP_PKEY_CTX_free(derive_ctx);
-////////
+
 	BIO_free(mbio);
 	EVP_PKEY_free(ecdh_client_pubkey);
 	EVP_PKEY_free(dhpvtkey);
@@ -184,33 +194,26 @@ void client_handler(int fd, struct user my_user) {
 	if (!sessionkey) {cerr<<"sessionkey MALLOC ERR";exit(1);}
 	ret=dh_generate_session_key(shared_secret, (unsigned int)slen, sessionkey);
 	free(shared_secret);
-	unsigned int send_counter,recv_counter=0;
+	
+	unsigned int send_counter=0,recv_counter=0;
 	my_user.online=true;
-	////////////
-	unsigned char* encrypted_buffer;
-	unsigned char* aad=(unsigned char* )malloc(sizeof(unsigned int));
-	if (!aad) {cerr<<"sessionkey MALLOC ERR";exit(1);}
-	memcpy(aad,&send_counter,sizeof(unsigned int));
-	unsigned int msgsiz=auth_encrypt(1,aad, sizeof(unsigned int), (unsigned char* )my_user.nickname, strlen(my_user.nickname), sessionkey, encrypted_buffer);
-	size=htonl(msgsiz);
-	cout<<"Sent MSG Size: "<<msgsiz<<endl;
-	ret=send(fd, &size, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"server_:Error writing to socket";exit(1);}
-	ret=send(fd, encrypted_buffer, msgsiz, 0);
-	if(ret<=0){cerr<<"server_:Error writing to socket";exit(1);}
+	/////////////
+	memcpy(aad,(unsigned char*)&send_counter,sizeof(unsigned int));
+	message_size=get_userlist(my_user.nickname, message);
+	ret=auth_encrypt(1,aad, sizeof(unsigned int), message, message_size , sessionkey, buffer);
+	send_message(fd,ret,buffer);
 	send_counter++;	
-	////////////
-	//add user to list
-	//send list
-	free(sessionkey);	
+	free(sessionkey);
+	free(buffer);
+	free(aad);
+	free(message);
 	close(fd);
-	return;
+	cout<<"quitr"<<endl;	
 }
 
 
 int main(int argc, char *argv[]){
 	std::vector<std::thread> threads;
-	std::vector<struct user> users_list;
 	unsigned int counter=0;
 	int sockfd, portno;
 	socklen_t clilen;
@@ -258,8 +261,8 @@ int main(int argc, char *argv[]){
 			struct user u;
 			users_list.push_back(u);
 			threads.push_back(std::thread(&client_handler, newsockfd, users_list.back()));	
-			for(int i=0; i<threads.size(); i++){			
-				while(!users_list[i].input_queue.empty()){
+			for(int i=0; i<users_list.size(); i++){			
+				while(!(users_list[i].input_queue.empty())){
 				
 					struct message_struct message = users_list[i].input_queue.front();
 					users_list[i].input_queue.pop();
@@ -270,11 +273,14 @@ int main(int argc, char *argv[]){
 					}
 				}
 			}
-		} 	
+		} 
+		for(std::thread & t : threads){
+			cout<<"qui"<<endl;	
+			if(t.joinable()) t.join();
+			
+		}
 	}
-		 
-	for(auto&& t : threads)
-		t.join();
+	 
 	close(sockfd);
 	return 0; 
 }

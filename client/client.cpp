@@ -22,11 +22,13 @@
 #define MAX_SIZE 10000
 #define NONCE_SIZE 4
 #define USERNAME_SIZE 20
+#define AUTHENCRYPT_HEADER_SIZE 34
 void error(const char *msg)
 {
     perror(msg);
     exit(1);
 }
+
 
 
 //authentication, login
@@ -94,12 +96,15 @@ EVP_PKEY* verify_server_certificate( unsigned char* buffer, long buffer_size ){
    return  server_pubkey; 
 }
 
-void  print_users_list(){
-	//richiesta online
-	//receive
-
-
-	return ;
+void  print_users_list(unsigned char* buffer, unsigned int buffer_size){
+	cout<<"Online Users: "<<endl;
+	unsigned int read=0;
+	char nickname[USERNAME_SIZE];
+	while(read<buffer_size){
+	read+=snprintf(nickname,sizeof(nickname),"%s",buffer+read);
+	printf("%s \n",nickname);
+	read++;
+	}
 }
 
 int main(int argc, char *argv[]){
@@ -107,7 +112,13 @@ int main(int argc, char *argv[]){
 	struct sockaddr_in serv_addr;
 	struct hostent *server;
 	uint32_t networknumber;
-	unsigned int messagesize;
+	unsigned int message_size;
+	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
+	if(!buffer){cerr<<"client handler: buffer Malloc Error";exit(1);}
+	unsigned char* message = (unsigned char*)malloc(MAX_SIZE);
+	if(!message){cerr<<"client handler: message Malloc Error";exit(1);}
+	unsigned char* aad = (unsigned char*)malloc(MAX_SIZE);
+	if(!aad){cerr<<"client handler: aad Malloc Error";exit(1);}
 	if (argc < 4) {	printf("usage %s hostname port username\n", argv[0]);exit(1);}
 	if(strlen(argv[3])>USERNAME_SIZE){cerr<<"Username lenght error";exit(1);}
 	 
@@ -149,17 +160,13 @@ int main(int argc, char *argv[]){
 	RAND_poll();
 	ret = RAND_bytes((unsigned char*)&mynonce[0],NONCE_SIZE);
 	if(ret!=1){cerr<<"RAND_bytes Error";exit(1);}
-	unsigned char* buffer=(unsigned char*) malloc(MAX_SIZE);
-	if(!buffer){cerr<<"buffer Malloc Error";exit(1);}
 
 	memcpy(buffer,mynonce,NONCE_SIZE);
 	memcpy(buffer+NONCE_SIZE,username,strlen(username));
 	
-	unsigned int max_sgnt_size=EVP_PKEY_size(user_key);
-	unsigned char* signature_buf=(unsigned char* )malloc(max_sgnt_size);
-	unsigned int signature_size=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),signature_buf);
-	send_signedmessage(sockfd, signature_size, signature_buf, NONCE_SIZE+strlen(username), buffer);
-	
+	unsigned int signed_size=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),message);
+	cout<<signed_size<<endl;
+	send_message(sockfd, signed_size, message);
 
 
 	//Verify server certificate
@@ -178,19 +185,24 @@ int main(int argc, char *argv[]){
 	}
 	EVP_PKEY* server_pubkey= verify_server_certificate( certbuffer, certsize );
 	//receive signedmessage
-	ret=receive_signedmessage(sockfd, signature_size, max_sgnt_size, signature_buf, messagesize, MAX_SIZE, buffer, true, mynonce, NONCE_SIZE);
-	if(ret!=1){cerr<<"receive signmessage: invalid nonce"; exit(1);}
-
+	signed_size=receive_message(sockfd, MAX_SIZE, buffer);
+	if(signed_size<=0){cerr<<"receive message: error"; exit(1);}
+	unsigned int signature_size=*(unsigned int*)buffer;
+	signature_size+=sizeof(unsigned int);
+	if(memcmp(buffer+signature_size,mynonce,NONCE_SIZE)!=0){
+				cerr<<"nonce received is not valid!";
+				exit(1);}
+	free(mynonce);
 	//verify signature and take server nonce
-	ret= digsign_verify(server_pubkey,buffer,messagesize,signature_buf,signature_size);
-	if(ret<=0){cerr<<"signature is invalid"; exit(1);}
+	message_size= digsign_verify(server_pubkey,buffer,signed_size,message);
+	if(message_size<=0){cerr<<"signature is invalid"; exit(1);}
 	unsigned char* servernonce=(unsigned char*) malloc(NONCE_SIZE);
 	if(!servernonce){cerr<<"servernonce Malloc Error";exit(1);}
-	memcpy(servernonce,buffer+NONCE_SIZE,NONCE_SIZE);
-	cout<<"OK"<<endl;
+	memcpy(servernonce,message+NONCE_SIZE,NONCE_SIZE);
+//////////
 	//extract ecdh_server_pubkey
 	BIO* mbio= BIO_new(BIO_s_mem());	
-	BIO_write(mbio, buffer+NONCE_SIZE+NONCE_SIZE, messagesize-NONCE_SIZE-NONCE_SIZE);
+	BIO_write(mbio, message+NONCE_SIZE+NONCE_SIZE, message_size-NONCE_SIZE-NONCE_SIZE);
 	EVP_PKEY* ecdh_server_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
 	BIO_free(mbio);
 	EVP_PKEY* ecdh_priv_key = dh_generate_key();
@@ -202,19 +214,15 @@ int main(int argc, char *argv[]){
 	if(!PEM_write_bio_PUBKEY(bio,  ecdh_priv_key)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
 	long keysize = BIO_get_mem_data(bio, &buffered_ECDHpubkey);
 	if (keysize<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
-	unsigned int buf_size=0;
-	memcpy(buffer, servernonce, NONCE_SIZE);
-	buf_size+= NONCE_SIZE;
-	memcpy(buffer+NONCE_SIZE, buffered_ECDHpubkey, keysize);	
-	buf_size+=keysize;
-	signature_size = digsign_sign(user_key, buffer, buf_size,signature_buf);
-	send_signedmessage(sockfd, signature_size, signature_buf, buf_size, buffer);
-	free(signature_buf);
-	//FIN QUI VA
-/*
-	unsigned char* shared_secret;
-	unsigned int slen =  dh_derive_shared_secret( ecdh_server_pubkey , ecdh_priv_key , shared_secret);
-*/
+	message_size=0;
+	memcpy(message, servernonce, NONCE_SIZE);
+	message_size+= NONCE_SIZE;
+	memcpy(message+message_size, buffered_ECDHpubkey, keysize);	
+	message_size+=keysize;
+	signed_size=digsign_sign(user_key, message, message_size,buffer);
+	send_message(sockfd, signed_size, buffer);
+	free(servernonce);
+
 	size_t slen;
 	EVP_PKEY_CTX *derive_ctx;
 	derive_ctx = EVP_PKEY_CTX_new(ecdh_priv_key, NULL);
@@ -229,40 +237,31 @@ int main(int argc, char *argv[]){
 	/*Perform again the derivation and store it in shared_secret buffer*/
 	if (EVP_PKEY_derive(derive_ctx, shared_secret, &slen) <= 0) {cerr<<"ERR";exit(1);}
 	EVP_PKEY_CTX_free(derive_ctx);
-/////////
 	EVP_PKEY_free(ecdh_server_pubkey);
 	EVP_PKEY_free(ecdh_priv_key);
 	unsigned char* server_sessionkey=(unsigned char*) malloc(EVP_MD_size(md));
 	ret = dh_generate_session_key( shared_secret, (unsigned int)slen , server_sessionkey);
 	free(shared_secret);
-	
-	unsigned int srv_rcv_counter, srv_counter=0;
+//////////	
+	unsigned int srv_rcv_counter=0, srv_counter=0;
 	short opcode;
 /////////
 	//DA PROVARE
-	ret = recv(sockfd, &networknumber, sizeof(uint32_t), 0);	
-	if(ret<=0){cerr<<"socket receive error"; exit(1);}
-	unsigned int msgsize=ntohl(networknumber);
-	cout<<"Test Recv Size: "<<msgsize<<endl;
-	received=0;
-	while(received<msgsize){
-		ret = recv(sockfd, buffer+received, msgsize-received, 0);	
-		if(ret<0){cerr<<"test msg receive error"; exit(1);}
-		received+=ret;
-	}
-	cout<<"Recv MSG Size: "<<received<<endl;
-	unsigned char* outbuf;
-	unsigned char* outaad;
+	message_size=receive_message(sockfd,MAX_SIZE,buffer);
+	unsigned int recieved=*(unsigned int*)(buffer+AUTHENCRYPT_HEADER_SIZE);
+	if(recieved!=srv_rcv_counter){cerr<<"Invalid Counter"; exit(1);}
+	srv_rcv_counter++;
 	unsigned int aadlen;
 	unsigned int msglen;
-	msglen= auth_decrypt(buffer, msgsize, server_sessionkey,opcode, outaad, aadlen, outbuf);
-	cout<<"opcode: "<<opcode<<endl;	
-	cout<<"Recv aad Size: "<<aadlen<<endl;
-	cout<<"aad: "<<outaad<<endl;
-	cout<<"Recv encr Size: "<<msglen<<endl;
-	cout<<"outbuf: "<<outbuf<<endl;
+	msglen= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+	print_users_list(message,msglen);
 /////////
 	cout<<"FINE"<<endl;
+	free(server_sessionkey);
+	free(buffer);
+	free(aad);
+	free(message);
+
 	//
 
 	
