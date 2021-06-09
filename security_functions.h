@@ -43,7 +43,7 @@ void send_message(int socket, unsigned int msg_size, unsigned char* message){
 	if(msg_size>MAX_SIZE){cerr<<"send:message too big"; return;}
 	uint32_t size=htonl(msg_size);
 	ret=send(socket, &size, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"message size send error";exit(1);}
+	if(ret<0){cerr<<"message size send error";exit(1);}
 	ret=send(socket, message, msg_size, 0);
 	if(ret<=0){cerr<<"message send error";exit(1);}
 
@@ -56,17 +56,18 @@ unsigned int receive_message(int socket, unsigned char* message){
 	unsigned int recieved=0;
 
 	ret = recv(socket, &networknumber, sizeof(uint32_t), 0);
-	if(ret<=0){cerr<<"socket receive error"; exit(1);}
-	unsigned int msg_size=ntohl(networknumber);
-	if(msg_size>MAX_SIZE){cerr<<"receive: message too big"; return 0;}	
-	while(recieved<msg_size){
-		ret = recv(socket,  message+recieved, msg_size-recieved, 0);	
-		if(ret<0){cerr<<"message receive error"; exit(1);}
-		recieved+=ret;
-	}
-	
-
+	if(ret<0){cerr<<"socket receive error " <<strerror(errno);exit(1);}
+	if(ret>0){
+		unsigned int msg_size=ntohl(networknumber);
+		if(msg_size>MAX_SIZE){cerr<<"receive: message too big"; return 0;}	
+		while(recieved<msg_size){
+			ret = recv(socket,  message+recieved, msg_size-recieved, 0);	
+			if(ret<0){cerr<<"message receive error"; exit(1);}
+			recieved+=ret;
+		}
 	return msg_size;
+	}
+	return 0;
 }
 
 

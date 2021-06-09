@@ -28,6 +28,9 @@ struct Args{
 	unsigned int* clt_rcv;
 	unsigned char* srv_session;
 	unsigned char* clt_session;
+	EVP_PKEY* user_key;
+	char* peer;
+	bool* pending;
 	bool* done;
 	bool* chatting;	
 };
@@ -124,6 +127,61 @@ void  print_users_list(unsigned char* buffer, unsigned int buffer_size){
 	}
 }
 
+
+int establishSessionAccepted(EVP_PKEY* user_key,unsigned char* sessionkey, unsigned char* signed_buffer, unsigned int &buffer_size){
+	int ret;
+	long pubkey_size=*(long*) (signed_buffer+sizeof(unsigned int));
+	BIO* bio= BIO_new(BIO_s_mem());
+	BIO_write(bio, signed_buffer+sizeof(unsigned int)+sizeof(long), pubkey_size);
+	EVP_PKEY* peerpubkey= PEM_read_bio_PUBKEY(bio, NULL, NULL, NULL);
+	BIO_free(bio);
+	unsigned char* message = (unsigned char*)malloc(MAX_SIZE);
+	if(!message){cerr<<" message Malloc Error";exit(1);}
+	int message_size= digsign_verify(peerpubkey,signed_buffer+pubkey_size+sizeof(unsigned int)+sizeof(long),buffer_size-pubkey_size-sizeof(long)-sizeof(unsigned int),message);
+	if(message_size<=0){cerr<<"signature is invalid"; return -1;}
+	unsigned char* nonce=(unsigned char*) malloc(NONCE_SIZE);
+	if(!nonce){cerr<<"nonce Malloc Error";exit(1);}
+	memcpy(nonce,message,NONCE_SIZE);
+	//extract ecdh_peer_pubkey
+	BIO* mbio= BIO_new(BIO_s_mem());	
+	BIO_write(mbio, message+NONCE_SIZE, message_size-NONCE_SIZE);
+	EVP_PKEY* ecdh_peer_pubkey= PEM_read_bio_PUBKEY(mbio, NULL, NULL, NULL);
+	BIO_free(mbio);
+	EVP_PKEY* ecdh_priv_key = dh_generate_key();
+	unsigned char* buffered_ECDHpubkey=NULL;
+	BIO* bio3 = BIO_new(BIO_s_mem());
+	if(!bio3) { cerr<<"dh_generate_key: Failed to allocate BIO_s_mem";exit(1); }
+	if(!PEM_write_bio_PUBKEY(bio3,  ecdh_priv_key)) { cerr<<"dh_generate_key: PEM_write_bio_PUBKEY error";exit(1); }
+	long keysize = BIO_get_mem_data(bio3, &buffered_ECDHpubkey);
+	if (keysize<=0) { cerr<<"dh_generate_key: BIO_get_mem_data error";exit(1); }
+	message_size=0;
+	memcpy(message, nonce, NONCE_SIZE);
+	message_size+= NONCE_SIZE;
+	memcpy(message+message_size, buffered_ECDHpubkey, keysize);	
+	message_size+=keysize;
+	buffer_size=digsign_sign(user_key, message, message_size,signed_buffer);
+	free(nonce);
+	size_t slen;
+	EVP_PKEY_CTX *derive_ctx;
+	derive_ctx = EVP_PKEY_CTX_new(ecdh_priv_key, NULL);
+	if (!derive_ctx) handleErrors();
+	if (EVP_PKEY_derive_init(derive_ctx) <= 0) handleErrors();
+	/*Setting the peer with its pubkey*/
+	if (EVP_PKEY_derive_set_peer(derive_ctx, ecdh_peer_pubkey) <= 0) handleErrors();
+	/* Determine buffer length, by performing a derivation but writing the result nowhere */
+	EVP_PKEY_derive(derive_ctx, NULL, &slen);
+	unsigned char* shared_secret = (unsigned char*)(malloc(int(slen)));	
+	if (!shared_secret) {cerr<<"MALLOC ERR";exit(1);}
+	/*Perform again the derivation and store it in shared_secret buffer*/
+	if (EVP_PKEY_derive(derive_ctx, shared_secret, &slen) <= 0) {cerr<<"ERR";exit(1);}
+	EVP_PKEY_CTX_free(derive_ctx);
+	EVP_PKEY_free(ecdh_peer_pubkey);
+	EVP_PKEY_free(ecdh_priv_key);
+	ret = dh_generate_session_key( shared_secret, (unsigned int)slen , sessionkey);
+	free(shared_secret);
+	return 0;
+}
+
 void *recv_handler(void* arguments){
 	Args* args= (Args*)arguments;
 	int socket=args->socket;
@@ -133,8 +191,11 @@ void *recv_handler(void* arguments){
 	unsigned int* clt_send_counter=args->clt_snd;
 	unsigned char*server_sessionkey=args->srv_session;
 	unsigned char*client_sessionkey=args->clt_session;
+	char* peer_username=args->peer;
+	bool* pending=args->pending;
 	bool* chatting=args->chatting;
 	bool* doneptr=args->done;
+	EVP_PKEY* user_key=args->user_key;
 	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
 	if(!buffer){cerr<<"recv handler: buffer Malloc Error";exit(1);}
 	unsigned char* message = (unsigned char*)malloc(MAX_SIZE);
@@ -146,71 +207,92 @@ void *recv_handler(void* arguments){
 	int ret;
 	unsigned int aadlen;
 	unsigned int msglen;
-	pthread_mutex_lock(&mutex);	
+	pthread_mutex_lock(&mutex);
 	bool done=*doneptr;
-	pthread_mutex_unlock(&mutex);	
+	pthread_mutex_unlock(&mutex);
 	while(!done){
-		pthread_mutex_lock(&mutex);
+		
 		message_size=receive_message(socket,buffer);
-		unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
-		if(received_counter==*srv_recv_counter){
-			ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
-			if(ret>=0){
-				increment_counter(*srv_recv_counter);
-				pthread_mutex_unlock(&mutex);
-				switch(opcode){
-					case 0:
-					{
-						pthread_mutex_lock(&mutex);				
-						*doneptr=true;
-						pthread_mutex_unlock(&mutex);
-					}break;
-					case 1:
-						if(ret>=0) print_users_list(message,ret);
-					break;
-					case 2:
-					{	
-						pthread_mutex_lock(&mutex);
-						string decision;
-						bool decided=false;
-						while(!decided){				
-							cout<<"Request to talk from: "<<message<<endl;
-							cout<<"Type !accept or !refuse."<<endl;
-							getline(cin, decision);
-							if(decision.compare("!accept")){
-							opcode=3;
-							//MAKE ECDHKEY,SEND WITH ACCEPT, WAIT FOR MESSAGE(5),EXTRACT PEER_ECDHKEY AND COMPOSE KEY
-							decided=true;
-							}
-							else if(decision.compare("!refuse")){
-							opcode=4;
-							//SEND REFUSE
-							decided=true;
-							}
-						}
-						pthread_mutex_unlock(&mutex);
-					}break;
-					case 5:
-					{
-						pthread_mutex_lock(&mutex);
-						if(*chatting){
-							char user[USERNAME_SIZE];
-							memcpy(user,message,USERNAME_SIZE);					
-							unsigned int cntr=*(unsigned int*)(aad+MSGHEADER);
-							if(cntr==*clt_recv_counter){
-								unsigned int msgsize;
-								ret= auth_decrypt(aad, aadlen, client_sessionkey,opcode, buffer, msgsize, message,false);
-								if (ret>0&&ret<MSG_MAX) {
-									increment_counter(*clt_recv_counter);	
-									printf("%s: %s \n",user,message);									
+		pthread_mutex_lock(&mutex);	
+		if(message_size>0){
+			unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
+			if(received_counter==*srv_recv_counter){
+				ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+				if(ret>=0){
+					increment_counter(*srv_recv_counter);
+					
+					switch(opcode){
+						case 0:
+						{				
+							*doneptr=true;
+							
+						}break;
+						case 1:
+						{
+							print_users_list(message,ret);
+						}break;
+						case 2:
+						{	
+							
+							string decision;
+							bool decided=false;
+							while(!decided){				
+								cout<<"Request to talk from: "<<message<<endl;
+								cout<<"Type !accept or !refuse."<<endl;
+								getline(cin, decision);
+								if(decision.compare("!accept")&&ret>0&&ret<=USERNAME_SIZE){
+								opcode=3;
+								memcpy(peer_username,message,ret);
+								//client_sessionkey=establishSessionSended(user_key, client_sessionkey, aad, aadlen);
+								decided=true;
+								}
+								else if(decision.compare("!refuse")){
+								opcode=4;
+								//SEND REFUSE
+								decided=true;
 								}
 							}
-							pthread_mutex_unlock(&mutex);
-						}
-					}break;
-				}
-			}else pthread_mutex_unlock(&mutex);
-		}else pthread_mutex_unlock(&mutex);
+							
+						}break;
+						case 3:
+						{	if(*pending){
+								message_size=ret;
+								ret=establishSessionAccepted(user_key, client_sessionkey, aad, aadlen);
+								if(ret>=0){
+									memcpy(buffer,(unsigned char*)srv_send_counter,sizeof(unsigned int));
+									memcpy(buffer+sizeof(unsigned int),aad,aadlen);
+									ret=auth_encrypt(6, buffer, aadlen+sizeof(unsigned int),message,message_size, server_sessionkey, aad);
+									if(ret>=0){
+										send_message(socket, ret, aad);
+									}
+								}
+							}	
+						}break;
+						case 5:
+						{
+							
+							if(*chatting){
+								char user[USERNAME_SIZE];
+								memcpy(user,message,USERNAME_SIZE);					
+								unsigned int cntr=*(unsigned int*)(aad+MSGHEADER);
+								if(cntr==*clt_recv_counter){
+									unsigned int msgsize;
+									ret= auth_decrypt(aad, aadlen, client_sessionkey, opcode, buffer, msgsize, message,false);
+									if (ret>0&&ret<MSG_MAX) {
+										increment_counter(*clt_recv_counter);	
+										printf("%s: %s \n",user,message);									
+									}
+								}
+								
+							}
+							
+						}break;
+					}
+				} 
+			} 
+		}
+	done=*doneptr;
+	pthread_mutex_unlock(&mutex);	
 	}
 	
 	free(buffer);
@@ -366,13 +448,15 @@ int main(int argc, char *argv[]){
 /////////
 	
 	string command;
-	printcommands();
 	bool done=false;
 	bool chatting=false;
+	bool pending=false;
 	unsigned char* client_sessionkey=(unsigned char*) malloc(EVP_MD_size(md));
 	if (!client_sessionkey) {cerr<<"MALLOC ERR";exit(1);}
 	pthread_t receiver;
-	Args* args=(Args *)malloc(sizeof(struct Args));
+	char peer_username[USERNAME_SIZE];
+	Args *args=(Args *)malloc(sizeof(struct Args));
+	if (!args) {cerr<<"MALLOC ERR";exit(1);}
 	args->socket=sockfd;
 	args->srv_rcv=&srv_rcv_counter;
 	args->clt_snd=&clt_counter;
@@ -380,58 +464,95 @@ int main(int argc, char *argv[]){
 	args->clt_rcv=&clt_rcv_counter;
 	args->srv_session=server_sessionkey;
 	args->clt_session=client_sessionkey;
+	args->user_key=user_key;
+	args->peer=peer_username;
 	args->done=&done;
 	args->chatting=&chatting;
-	if( pthread_create(&receiver, NULL, &recv_handler, (void *)&args)  != 0 )
+	args->pending=&pending;
+	printcommands();
+	if( pthread_create(&receiver, NULL, &recv_handler, (void *)args)  != 0 )
 		printf("Failed to create thread\n");
-	while(!chatting&&!done){
-		getline(cin, command,' ');
+	while(!chatting && !done){
+		getline(cin, command);
 		if(!cin){cerr<<"cin error"; exit(1);}
-		if(command.compare("!quit")==0){
-			opcode=0;
-			pthread_mutex_lock(&mutex);				
-			//SEND
-			done=true;
-			pthread_mutex_unlock(&mutex);
-		}
-		else if (command.compare("!help")==0)
-			printcommands();				
-		else if (command.compare("!list")==0)
-		{
-			opcode=1;
+		else if(command.compare("!quit")==0){			
+			opcode=0;				
 			pthread_mutex_lock(&mutex);
-			// SEND
-			message_size=receive_message(sockfd,buffer);
-			unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
-			if(received_counter==srv_rcv_counter){
-				ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
-				if (ret>=0&&opcode==1){
-					increment_counter(srv_rcv_counter);
-					print_users_list(message,ret);
-				}
+			ret=auth_encrypt(opcode,(unsigned char*) &srv_counter, sizeof(unsigned int), (unsigned char*)username, strlen(username)+1 , server_sessionkey, buffer);
+			send_message(sockfd,ret,buffer);
+			increment_counter(srv_counter);
 			pthread_mutex_unlock(&mutex);
+			done=true;
 		}
+		else if (command.compare("!help")==0){
+			printcommands();
+		}				
+		else if (command.compare("!list")==0)
+		{	opcode=1;
+			pthread_mutex_lock(&mutex);
+			ret=auth_encrypt(opcode,(unsigned char*) &srv_counter, sizeof(unsigned int), (unsigned char*)username, strlen(username)+1 , server_sessionkey, buffer);
+			send_message(sockfd,ret,buffer);
+			increment_counter(srv_counter);
+			pthread_mutex_unlock(&mutex);
 			
 			
 		}
-		else if(command.compare("!request")==0)
-		{				
-			string peername;			
-			getline(cin, peername);
-			if(peername.length()>=USERNAME_SIZE)
-				cout<<"Invalid username.";
-			else{
+		else if(command.compare(0,9,"!request ")==0){
+			string peer=command.substr(9,command.length());			
+			if(peer.length()>=USERNAME_SIZE)
+				cout<<"Invalid username."<<endl;
+			else{cout<<"Requested "<<peer<<endl;
 				opcode=2;
 				pthread_mutex_lock(&mutex);
-				//SEND	
-				//RECEIVE ACCEPT, EXTRACT PEER_ECDHKEY, MAKE ECDHKEY,SEND WITH MESSAGE(5) AND COMPOSE KEY 
-					chatting=true;
-				//OR RECEIVE REFUSE
+				pending=true;
+				//SEND
+				bool response=false;
+				while(!response){
+					message_size=receive_message(sockfd,buffer);
+					received_counter=*(unsigned int*)(buffer+MSGHEADER);
+					if(received_counter==srv_rcv_counter){
+						ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+						if (ret>=0){
+							increment_counter(srv_rcv_counter);
+						}
+						char recvname[USERNAME_SIZE];
+						memcpy(recvname,message,ret);	
+						if(opcode==3 && (command.compare(9,command.length()-9,recvname)==0)) {
+						//ACCEPT, EXTRACT PEER_ECDHKEY, MAKE ECDHKEY,SEND WITH MESSAGE(5) AND COMPOSE KEY 
+							strncpy(peer_username,recvname,ret);					
+							chatting=true;
+							response=true;
+						}
+						else if(opcode==4)
+						{
+							cout<<message<< "refused chat." <<endl;
+							response=true;
+						}
+					}
+				}
 				pthread_mutex_unlock(&mutex);
 			}
 		}
-		else
-			cout<<"Wrong command."<<endl;
+		else{	
+		cout<<"Wrong command."<<endl;
+		}
+	}
+	string typed;
+	while(chatting && !done){
+		pthread_mutex_lock(&mutex);
+		cout<<"you: ";
+		getline(cin, typed);
+		if (typed.length()>MSG_MAX) 
+			cerr<<"message too long."<<endl;
+		else{	
+			typed.copy((char*)aad,typed.length());
+			message_size=auth_encrypt(5,(unsigned char*) &clt_counter,sizeof(unsigned int),aad,typed.length(),client_sessionkey,message,false);
+			ret=auth_encrypt(5,(unsigned char*) &srv_counter,sizeof(unsigned int),message,message_size,server_sessionkey,buffer);
+			send_message(sockfd,ret,buffer);					
+			increment_counter(srv_counter);
+			
+		}
+		pthread_mutex_unlock(&mutex);
 	}
 	pthread_join(receiver,NULL);
 ////////
@@ -441,50 +562,5 @@ int main(int argc, char *argv[]){
 	free(buffer);
 	free(aad);
 	free(message);
-
-	//
-
-	
-	//memcpy, bio per trasformare in chiave, quindi generare mia parte, inviare e poi computare chiave completa. 	
-//SPLIT: divento disponible anche agli altri
-//receive users list dal server   
-
-//[0]wait (ciclo) aspetto o [1] o [2]
-//[1] chiedo di parlare con qualcuno
-//[2]ricevi richiesta di contatto dal client
-
-//[caso 1]
-//wait server response : public_key_peer / rifiuto
-//[1.1] rifiuto: ricevi lista in automatico dal server, e torno alla wait [0]
- 
-//[1.2] ricevo  public_key_peer 
-//genera parte_csendel_dh_key,p,g (?)
-// send parte_csender_dh_key
-//wait
-//receive parte_creceiver_dh_key
-
-//[caso 2]
-//[2.1] send accept 
-//[2.2] send reject
-
-//[2.1]
-//receive public_key_peer
-//receive parte_csender_dh_key
-//genera p,g,parte_creceiver_dh_key
-//send parte_creceiver_dh_key
-
-//[2.2]
-//receive users list dal server
-//torno al wait[0]
-
-//continuo sia [1.2] [2.1]
-//unisco parti e genera dh_key_cc
-
-//comunicazione ho la chiave di sessione
-//cripto e mando
-//rivevo e decripto
-
-//send logout al server comando: /logout
-//quando si chiude in auto il programma faccio una send logout **(?)
-return 0;
+	return 0;
 }
