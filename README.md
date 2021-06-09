@@ -58,11 +58,11 @@ Sequence diagrams of the comunication phase:
 
 #### Messages structure:
 
-- Message with opcode **0**,**1**,**2**,**3**,**4**:
+- Messages with opcode **0**,**1**,**2**,**3**,**4**:
 
 ![opcode01234](/Documentation/opcode01234.png)
 
-- Message with opcode **5**:
+- Messages with opcode **5**:
 
 ![opcode5](/Documentation/opcode5.png)
 
