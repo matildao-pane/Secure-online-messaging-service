@@ -20,10 +20,10 @@ These are the opcodes that help identifing the messages different structure.
 OPCODE# | Name | Meaning 
 ---  | --- | ---
 0 | QUIT | the user exits the application
-1 | LIST | the user request the list of the updated online users
-2 | RTT | the user request to talk with the user specified in the payload
-3 | ACCEPT | the user receive an RTT and accept it
-4 | REFUSE | the user refuse to talk with the user who sent the RTT
+1 | LIST | the user requests the list of the updated online users
+2 | RTT | the user requests to talk with the user specified in the payload
+3 | ACCEPT | the user receives an RTT and accept it
+4 | REFUSE | the user refuses to talk with the user who sent the RTT
 5 | MESSAGE | the messages with this opcode are the messages exchanged during the chat
  
 ### Authentication phase:
