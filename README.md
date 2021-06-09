@@ -76,6 +76,11 @@ Sequence diagram to send an RTT, accept it or refuse it, then starting the comun
 
 ![opcode2_RTT_C_S](/Documentation/opcode2_RTT_C_S.png)
 
+- Messages with opcode **2** RTT FROM SERVER TO CLIENT:
+
+![opcode2_RTT_S_C](/Documentation/opcode2_RTT_S_C.png)
+
+
 - Messages with opcode **3**:
 
  
