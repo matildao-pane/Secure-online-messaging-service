@@ -8,6 +8,12 @@
 #include <stdio.h>
 #include <limits.h>
 #include <string.h> 
+
+#define USERNAME_SIZE 20
+#define MAX_SIZE 20000
+#define MSG_MAX 10000
+#define NONCE_SIZE 4
+#define MAX_CLIENTS 20
 using namespace std;
 
 //Authencrypt parameters
@@ -23,9 +29,16 @@ void handleErrors(void){
 	abort();
 }
 
+void increment_counter(unsigned int &counter){
+	if(counter==UINT_MAX)
+		counter=0;
+	else
+		counter++;
+}
+
 void send_message(int socket, unsigned int msg_size, unsigned char* message){
 	int ret;
-
+	if(msg_size>MAX_SIZE){cerr<<"send:message too big"; return;}
 	uint32_t size=htonl(msg_size);
 	ret=send(socket, &size, sizeof(uint32_t), 0);
 	if(ret<=0){cerr<<"message size send error";exit(1);}
@@ -34,7 +47,7 @@ void send_message(int socket, unsigned int msg_size, unsigned char* message){
 
 }
 
-unsigned int receive_message(int socket, unsigned int max_size, unsigned char* message){
+unsigned int receive_message(int socket, unsigned char* message){
 	int ret;
 	uint32_t networknumber;
 
@@ -43,7 +56,7 @@ unsigned int receive_message(int socket, unsigned int max_size, unsigned char* m
 	ret = recv(socket, &networknumber, sizeof(uint32_t), 0);
 	if(ret<=0){cerr<<"socket receive error"; exit(1);}
 	unsigned int msg_size=ntohl(networknumber);
-	if(msg_size>max_size){cerr<<"message too big"; exit(1);}	
+	if(msg_size>MAX_SIZE){cerr<<"receive: message too big"; return 0;}	
 	while(recieved<msg_size){
 		ret = recv(socket,  message+recieved, msg_size-recieved, 0);	
 		if(ret<0){cerr<<"message receive error"; exit(1);}
@@ -59,7 +72,7 @@ unsigned int receive_message(int socket, unsigned int max_size, unsigned char* m
 //Digital Signature Sign/Verify
 unsigned int digsign_sign(EVP_PKEY* prvkey, unsigned char* clear_buf, unsigned int clear_size,   unsigned char* output_buffer){
 	int ret; // used for return values
-	
+	if(clear_size>MSG_MAX){ cerr << "digsign_sign: message too big(invalid)\n"; exit(1); }
 	// create the signature context:
 	EVP_MD_CTX* md_ctx = EVP_MD_CTX_new();
 	if(!md_ctx){ cerr << "digsign_sign: EVP_MD_CTX_new returned NULL\n"; exit(1); }
@@ -118,11 +131,6 @@ int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned 
 	return input_size-read;
 }
 
-
-
-
-
-
 // Diffie-Hellman for session key
 EVP_PKEY* dh_generate_key(){
 
@@ -152,28 +160,6 @@ EVP_PKEY* dh_generate_key(){
 
 } 
 
-/*
-PER FORZA NEL MAIN, DA SEGMENTATION FAULT (?)
-
-unsigned int dh_derive_shared_secret(EVP_PKEY* peer_pub_key, EVP_PKEY* my_prv_key, unsigned char *shared_secret){
-	size_t shared_secretlen;
-	EVP_PKEY_CTX *derive_ctx;
-	derive_ctx = EVP_PKEY_CTX_new(my_prv_key, NULL);
-	if (!derive_ctx) handleErrors();
-	if (EVP_PKEY_derive_init(derive_ctx) <= 0) handleErrors();
-	/*Setting the peer with its pubkey
-	if (EVP_PKEY_derive_set_peer(derive_ctx, peer_pub_key) <= 0) handleErrors();
-	/* Determine buffer length, by performing a derivation but writing the result nowhere 
-	EVP_PKEY_derive(derive_ctx, NULL, &shared_secretlen);
-	shared_secret = (unsigned char*)(malloc(int(shared_secretlen)));	
-	if (!shared_secret) handleErrors();
-	/*Perform again the derivation and store it in shared_secret buffer
-	if (EVP_PKEY_derive(derive_ctx, shared_secret, &shared_secretlen) <= 0) handleErrors();
-	EVP_PKEY_CTX_free(derive_ctx);
-	return (unsigned int)shared_secretlen;
-}
-
-*/
 unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int shared_secretlen, unsigned char *sessionkey){
 	unsigned int sessionkey_len;
 	int ret;
@@ -200,7 +186,8 @@ unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int s
 
 //Authenticated Encryption/Decryption
 unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len, unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, unsigned char *output_buffer){
-	if(input_len > UINT_MAX-AE_block_size-aad_len-sizeof(unsigned int)-AE_iv_len-AE_tag_len-sizeof(short)) {cerr<<"Auth encrypt: Output Integer Overflow Error";exit(1);}
+	if(input_len > MAX_SIZE || aad_len > MAX_SIZE) {cerr<<"Auth encrypt: Aad or plaintext too big";return -1;}
+	if(input_len + aad_len > MAX_SIZE-AE_block_size-sizeof(unsigned int)-AE_iv_len-AE_tag_len-sizeof(short)) {cerr<<"Auth encrypt: Packet is too big";return -1;}
 	int ret;
 	unsigned char *iv = (unsigned char *)malloc(AE_iv_len);
 	if(!iv) {cerr<<"auth encrypt: iv Malloc Error";exit(1);}
@@ -249,7 +236,6 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	written+=AE_iv_len;
 	memcpy(output_buffer + written, (unsigned char *)&aad_len, sizeof(unsigned int));
 	written+=sizeof(unsigned int);
-	cout<<*(unsigned int*) (aad)<<endl;
 	memcpy(output_buffer + written, aad, aad_len);
 	written+=aad_len;
 	memcpy(output_buffer + written, ciphertext, ciphertext_len);
@@ -262,9 +248,10 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	return written;
 	}
 
-unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, short &opcode, unsigned char *output_aad, unsigned int &aad_len, unsigned char* output_buffer)
-{
+int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, short &opcode, unsigned char *output_aad, unsigned int &aad_len, unsigned char* output_buffer){
 	
+	if(input_len <= AE_iv_len+AE_tag_len+sizeof(short)) { cerr << "Error auth decrypt: malformed or empty message.\n"; return -1; }
+	if(input_len > MAX_SIZE) {cerr<<"Auth decrypt: Packet too big";return -1;}
 	EVP_CIPHER_CTX *ctx;
 	unsigned int read=0;
 	opcode=*(short*)(input_buffer);
@@ -278,10 +265,10 @@ unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, u
 	read+=AE_tag_len;
 	memcpy(iv, input_buffer + read, AE_iv_len);
 	read+=AE_iv_len;
-	if(input_len <= read) { cerr << "Error auth decrypt: encrypted buffer with wrong format\n"; exit(1); }
 	aad_len=*(unsigned int*)(input_buffer+read);
 	read+=sizeof(unsigned int);
-	if(!tag) {cerr<<"auth decrypt: aad Malloc Error";exit(1);}
+	if(input_len < read+aad_len) { cerr << "Error auth decrypt: invalid aad_len\n"; return -1; }
+	if(aad_len>MSG_MAX) {cerr<<"Auth decrypt: Aad too big";return -1;}
 	memcpy(output_aad, input_buffer + read, aad_len);
 	read+=aad_len;
 	unsigned char* complete_aad=(unsigned char*)malloc(sizeof(short)+aad_len);
@@ -289,6 +276,7 @@ unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, u
 	memcpy(complete_aad, &opcode,sizeof(short));
 	memcpy(complete_aad+sizeof(short),output_aad,aad_len);
 	unsigned int ciphertext_len = input_len - read;
+	if(ciphertext_len>MSG_MAX) {cerr<<"Auth decrypt: ciphertext too big";return -1;}
 	unsigned char* ciphertext = (unsigned char *)malloc(ciphertext_len);
 	if(!ciphertext) {cerr<<"auth decrypt: ciphertext Malloc Error";exit(1);}
 	memcpy(ciphertext, input_buffer + read, ciphertext_len);
@@ -326,7 +314,7 @@ unsigned int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, u
 	} else {
 	/* Verify failed */
 	cerr<<"auth decrypt: Verification failed!";
-	return 0;
+	return -1;
 	}
 }
 /*

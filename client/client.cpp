@@ -19,10 +19,7 @@
 #include <openssl/err.h>
 #include "../security_functions.h"
 
-#define MAX_SIZE 10000
-#define NONCE_SIZE 4
-#define USERNAME_SIZE 20
-#define AUTHENCRYPT_HEADER_SIZE 34
+
 void error(const char *msg)
 {
     perror(msg);
@@ -112,7 +109,7 @@ int main(int argc, char *argv[]){
 	struct sockaddr_in serv_addr;
 	struct hostent *server;
 	uint32_t networknumber;
-	unsigned int message_size;
+	int message_size;
 	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
 	if(!buffer){cerr<<"client handler: buffer Malloc Error";exit(1);}
 	unsigned char* message = (unsigned char*)malloc(MAX_SIZE);
@@ -120,7 +117,7 @@ int main(int argc, char *argv[]){
 	unsigned char* aad = (unsigned char*)malloc(MAX_SIZE);
 	if(!aad){cerr<<"client handler: aad Malloc Error";exit(1);}
 	if (argc < 4) {	printf("usage %s hostname port username\n", argv[0]);exit(1);}
-	if(strlen(argv[3])>USERNAME_SIZE){cerr<<"Username lenght error";exit(1);}
+	if(strlen(argv[3])>=USERNAME_SIZE){cerr<<"Username is too long (max 19 characters)";exit(1);}
 	 
 	char* username = argv[3];
 	char u_name[USERNAME_SIZE];
@@ -165,7 +162,6 @@ int main(int argc, char *argv[]){
 	memcpy(buffer+NONCE_SIZE,username,strlen(username));
 	
 	unsigned int signed_size=digsign_sign(user_key, buffer, NONCE_SIZE+strlen(username),message);
-	cout<<signed_size<<endl;
 	send_message(sockfd, signed_size, message);
 
 
@@ -185,7 +181,7 @@ int main(int argc, char *argv[]){
 	}
 	EVP_PKEY* server_pubkey= verify_server_certificate( certbuffer, certsize );
 	//receive signedmessage
-	signed_size=receive_message(sockfd, MAX_SIZE, buffer);
+	signed_size=receive_message(sockfd, buffer);
 	if(signed_size<=0){cerr<<"receive message: error"; exit(1);}
 	unsigned int signature_size=*(unsigned int*)buffer;
 	signature_size+=sizeof(unsigned int);
@@ -247,15 +243,18 @@ int main(int argc, char *argv[]){
 	short opcode;
 /////////
 	//DA PROVARE
-	message_size=receive_message(sockfd,MAX_SIZE,buffer);
-	unsigned int recieved=*(unsigned int*)(buffer+AUTHENCRYPT_HEADER_SIZE);
+	message_size=receive_message(sockfd,buffer);
+	unsigned int recieved=*(unsigned int*)(buffer+34);
 	if(recieved!=srv_rcv_counter){cerr<<"Invalid Counter"; exit(1);}
 	srv_rcv_counter++;
 	unsigned int aadlen;
 	unsigned int msglen;
-	msglen= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
-	print_users_list(message,msglen);
+	ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+	if (ret>=0) print_users_list(message,ret);
 /////////
+	char bho[100];
+	cin>>bho;
+	send_message(sockfd, strlen(bho)+1, (unsigned char*)bho);
 	cout<<"FINE"<<endl;
 	free(server_sessionkey);
 	free(buffer);
@@ -306,6 +305,5 @@ int main(int argc, char *argv[]){
 
 //send logout al server comando: /logout
 //quando si chiude in auto il programma faccio una send logout **(?)
-
 return 0;
 }

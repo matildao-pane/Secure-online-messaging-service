@@ -218,7 +218,6 @@ int main(int argc, char *argv[]){
 	int sockfd, portno;
 	socklen_t clilen;
 	pid_t pid;
-	char buffer[256];
 	struct sockaddr_in serv_addr, cli_addr;
 	int n;
 	if (argc < 2) {
