@@ -13,7 +13,7 @@ For every new connection the server creates a new thread which will comunicate w
 
 After a preliminar authentication phase whith the incoming clients, the server main thread forwards the messages received from the sending client to the destination client.
 
-The multithreaded client can send and receive message in parallel.
+The client is multithreaded too in order to receive messages while sending them.
 
 ### Opcodes:
 These are the opcodes that help identifing the messages different structure.
