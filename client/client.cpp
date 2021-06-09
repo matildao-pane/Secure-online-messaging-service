@@ -200,13 +200,14 @@ void *recv_handler(void* arguments){
 							if(cntr==*clt_recv_counter){
 								unsigned int msgsize;
 								ret= auth_decrypt(aad, aadlen, client_sessionkey,opcode, buffer, msgsize, message,false);
-								if (ret>0&&ret<MSG_MAX) {increment_counter(*clt_recv_counter);	
-								printf("%s: %s \n",user,message);									
+								if (ret>0&&ret<MSG_MAX) {
+									increment_counter(*clt_recv_counter);	
+									printf("%s: %s \n",user,message);									
+								}
 							}
+							pthread_mutex_unlock(&mutex);
 						}
-						pthread_mutex_unlock(&mutex);
 					}break;
-					}
 				}
 			}else pthread_mutex_unlock(&mutex);
 		}else pthread_mutex_unlock(&mutex);
