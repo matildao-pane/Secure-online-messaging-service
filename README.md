@@ -7,13 +7,13 @@ Group project for the Foundations of Cybersecurity course of the Artificial Inte
 ## Introduction
 This a client server application.
 
-The multithreaded server can handle multiple clients connected at the same time.
+The multi threaded server can handle multiple clients connected at the same time.
 
 For every new connection the server creates a new thread which will comunicate with its associated client.
 
 After a preliminar authentication phase whith the incoming clients, the server main thread forwards the messages received from the sending client to the destination client.
 
-The client is multithreaded too in order to receive messages while sending them.
+The client is multi threaded too in order to receive messages while sending them.
 
 ### Opcodes:
 These are the opcodes that help identifing the messages different structure.
