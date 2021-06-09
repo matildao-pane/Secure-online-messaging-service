@@ -275,7 +275,7 @@ void *client_handler(void* arguments) {
 	cout<<4<<endl;	
 	unsigned char* buffissimo=(unsigned char*)malloc(MAX_SIZE);
 	ret=receive_message(socket, buffissimo);
-	cout<<myuser->nickname<<buffissimo<<endl;
+	cout<<buffissimo<<endl;
 	/*pthread_t outputmanager;
 	if( pthread_create(&outputmanager, NULL, &outputqueue_handler, (void *)args)  != 0 )
 		printf("Failed to create thread\n");
@@ -357,13 +357,6 @@ int main(int argc, char *argv[]){
 			for(list<User>::iterator it2=userlist.begin(); it2 != userlist.end();it2++){
 				if(strcmp(message.dest, it2->nickname) == 0){
 					it2->outputqueue.push(message);
-				}
-				else{
-					Packet message2;
-					message2.opcode=6;
-					strncpy(message2.source,"server",USERNAME_SIZE);
-					strncpy(message2.dest,message.source,USERNAME_SIZE);
-					message2.msgsize=0;
 				}
 			}
 		}
