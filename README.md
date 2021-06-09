@@ -46,7 +46,7 @@ Sequence diagram of the preliminar authenticaation phase:
 
 ![mex12](/Documentation/1.2.png)
 
-### Coumincation phase:
+### Comunication phase:
 
 #### Sequence diagram:
 
