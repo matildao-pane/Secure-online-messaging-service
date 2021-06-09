@@ -19,6 +19,18 @@
 #include <openssl/err.h>
 #include "../security_functions.h"
 
+pthread_mutex_t mutex;
+struct Args{
+	unsigned int socket;
+	unsigned int* srv_snd;
+	unsigned int* clt_snd;
+	unsigned int* srv_rcv;
+	unsigned int* clt_rcv;
+	unsigned char* srv_session;
+	unsigned char* clt_session;
+	bool* done;
+	bool* chatting;	
+};
 
 void error(const char *msg)
 {
@@ -26,7 +38,15 @@ void error(const char *msg)
     exit(1);
 }
 
-
+void printcommands()
+{
+	cout<<"Available Features:"<<endl;
+	cout<<"!quit: exit program"<<endl;
+	cout<<"!help: print this list"<<endl;
+	cout<<"!list: request fresh available userlist"<<endl;
+	cout<<"!request <username>: request to chat with username"<<endl;
+	
+}
 
 //authentication, login
 EVP_PKEY* verify_server_certificate( unsigned char* buffer, long buffer_size ){
@@ -104,6 +124,101 @@ void  print_users_list(unsigned char* buffer, unsigned int buffer_size){
 	}
 }
 
+void *recv_handler(void* arguments){
+	Args* args= (Args*)arguments;
+	int socket=args->socket;
+	unsigned int* srv_recv_counter=args->srv_rcv;
+	unsigned int* srv_send_counter=args->srv_snd;
+	unsigned int* clt_recv_counter=args->clt_rcv;
+	unsigned int* clt_send_counter=args->clt_snd;
+	unsigned char*server_sessionkey=args->srv_session;
+	unsigned char*client_sessionkey=args->clt_session;
+	bool* chatting=args->chatting;
+	bool* doneptr=args->done;
+	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
+	if(!buffer){cerr<<"recv handler: buffer Malloc Error";exit(1);}
+	unsigned char* message = (unsigned char*)malloc(MAX_SIZE);
+	if(!message){cerr<<"recv handler: message Malloc Error";exit(1);}
+	unsigned char* aad = (unsigned char*)malloc(MAX_SIZE);
+	if(!aad){cerr<<"recv handler: aad Malloc Error";exit(1);}
+	short opcode;
+	int message_size;
+	int ret;
+	unsigned int aadlen;
+	unsigned int msglen;
+	pthread_mutex_lock(&mutex);	
+	bool done=*doneptr;
+	pthread_mutex_unlock(&mutex);	
+	while(!done){
+		pthread_mutex_lock(&mutex);
+		message_size=receive_message(socket,buffer);
+		unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
+		if(received_counter==*srv_recv_counter){
+			ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+			if(ret>=0){
+				increment_counter(*srv_recv_counter);
+				pthread_mutex_unlock(&mutex);
+				switch(opcode){
+					case 0:
+					{
+						pthread_mutex_lock(&mutex);				
+						*doneptr=true;
+						pthread_mutex_unlock(&mutex);
+					}break;
+					case 1:
+						if(ret>=0) print_users_list(message,ret);
+					break;
+					case 2:
+					{	
+						pthread_mutex_lock(&mutex);
+						string decision;
+						bool decided=false;
+						while(!decided){				
+							cout<<"Request to talk from: "<<message<<endl;
+							cout<<"Type !accept or !refuse."<<endl;
+							getline(cin, decision);
+							if(decision.compare("!accept")){
+							opcode=3;
+							//MAKE ECDHKEY,SEND WITH ACCEPT, WAIT FOR MESSAGE(5),EXTRACT PEER_ECDHKEY AND COMPOSE KEY
+							decided=true;
+							}
+							else if(decision.compare("!refuse")){
+							opcode=4;
+							//SEND REFUSE
+							decided=true;
+							}
+						}
+						pthread_mutex_unlock(&mutex);
+					}break;
+					case 5:
+					{
+						pthread_mutex_lock(&mutex);
+						if(*chatting){
+							char user[USERNAME_SIZE];
+							memcpy(user,message,USERNAME_SIZE);					
+							unsigned int cntr=*(unsigned int*)(aad+MSGHEADER);
+							if(cntr==*clt_recv_counter){
+								unsigned int msgsize;
+								ret= auth_decrypt(aad, aadlen, client_sessionkey,opcode, buffer, msgsize, message,false);
+								if (ret>0&&ret<MSG_MAX) {increment_counter(*clt_recv_counter);	
+								printf("%s: %s \n",user,message);									
+							}
+						}
+						pthread_mutex_unlock(&mutex);
+					}break;
+					}
+				}
+			}else pthread_mutex_unlock(&mutex);
+		}else pthread_mutex_unlock(&mutex);
+	}
+	
+	free(buffer);
+	free(message);
+	free(aad);
+	pthread_exit(NULL);
+}
+
+
 int main(int argc, char *argv[]){
 	int sockfd, portno, ret;
 	struct sockaddr_in serv_addr;
@@ -119,17 +234,13 @@ int main(int argc, char *argv[]){
 	if (argc < 4) {	printf("usage %s hostname port username\n", argv[0]);exit(1);}
 	if(strlen(argv[3])>=USERNAME_SIZE){cerr<<"Username is too long (max 19 characters)";exit(1);}
 	 
-	char* username = argv[3];
-	char u_name[USERNAME_SIZE];
-	strncpy(u_name, argv[3],USERNAME_SIZE);
-	char filename[] = "users/";
-	strcat(filename,u_name);
-	char endname[] = ".pem";
-	strcat(filename,endname);
+	char username[USERNAME_SIZE];
+	sprintf(username,"%s",argv[3]);
+	string filename = "users/"+string(username)+".pem";
 	portno = atoi(argv[2]);
 	
 	EVP_PKEY* user_key;
-	FILE* file = fopen(filename, "r");
+	FILE* file = fopen(filename.c_str(), "r");
 	if(!file) {cerr<<"User does not have a key file";exit(1);}   
 	user_key= PEM_read_PrivateKey(file, NULL, NULL, NULL);
 	if(!user_key) {cerr<<"user_key Error";exit(1);}
@@ -236,27 +347,96 @@ int main(int argc, char *argv[]){
 	EVP_PKEY_free(ecdh_server_pubkey);
 	EVP_PKEY_free(ecdh_priv_key);
 	unsigned char* server_sessionkey=(unsigned char*) malloc(EVP_MD_size(md));
+	if (!server_sessionkey) {cerr<<"MALLOC ERR";exit(1);}
 	ret = dh_generate_session_key( shared_secret, (unsigned int)slen , server_sessionkey);
 	free(shared_secret);
-//////////	
-	unsigned int srv_rcv_counter=0, srv_counter=0;
+	
+	unsigned int srv_rcv_counter=0, srv_counter=0,clt_rcv_counter=0, clt_counter=0;
 	short opcode;
 	unsigned int aadlen;
 	unsigned int msglen;
-/////////
-	//DA PROVARE
 	message_size=receive_message(sockfd,buffer);
 	unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
 	if(received_counter==srv_rcv_counter){
 		ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
 		increment_counter(srv_rcv_counter);
 		if (ret>=0) print_users_list(message,ret);
+	}
 /////////
-	char bho[100];
-	cin>>bho;
-	send_message(sockfd, strlen(bho)+1, (unsigned char*)bho);
+	
+	string command;
+	printcommands();
+	bool done=false;
+	bool chatting=false;
+	unsigned char* client_sessionkey=(unsigned char*) malloc(EVP_MD_size(md));
+	if (!client_sessionkey) {cerr<<"MALLOC ERR";exit(1);}
+	pthread_t receiver;
+	Args* args=(Args *)malloc(sizeof(struct Args));
+	args->socket=sockfd;
+	args->srv_rcv=&srv_rcv_counter;
+	args->clt_snd=&clt_counter;
+	args->srv_snd=&srv_counter;
+	args->clt_rcv=&clt_rcv_counter;
+	args->srv_session=server_sessionkey;
+	args->clt_session=client_sessionkey;
+	args->done=&done;
+	args->chatting=&chatting;
+	if( pthread_create(&receiver, NULL, &recv_handler, (void *)&args)  != 0 )
+		printf("Failed to create thread\n");
+	while(!chatting&&!done){
+		getline(cin, command,' ');
+		if(!cin){cerr<<"cin error"; exit(1);}
+		if(command.compare("!quit")==0){
+			opcode=0;
+			pthread_mutex_lock(&mutex);				
+			//SEND
+			done=true;
+			pthread_mutex_unlock(&mutex);
+		}
+		else if (command.compare("!help")==0)
+			printcommands();				
+		else if (command.compare("!list")==0)
+		{
+			opcode=1;
+			pthread_mutex_lock(&mutex);
+			// SEND
+			message_size=receive_message(sockfd,buffer);
+			unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
+			if(received_counter==srv_rcv_counter){
+				ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+				if (ret>=0&&opcode==1){
+					increment_counter(srv_rcv_counter);
+					print_users_list(message,ret);
+				}
+			pthread_mutex_unlock(&mutex);
+		}
+			
+			
+		}
+		else if(command.compare("!request")==0)
+		{				
+			string peername;			
+			getline(cin, peername);
+			if(peername.length()>=USERNAME_SIZE)
+				cout<<"Invalid username.";
+			else{
+				opcode=2;
+				pthread_mutex_lock(&mutex);
+				//SEND	
+				//RECEIVE ACCEPT, EXTRACT PEER_ECDHKEY, MAKE ECDHKEY,SEND WITH MESSAGE(5) AND COMPOSE KEY 
+					chatting=true;
+				//OR RECEIVE REFUSE
+				pthread_mutex_unlock(&mutex);
+			}
+		}
+		else
+			cout<<"Wrong command."<<endl;
+	}
+	pthread_join(receiver,NULL);
+////////
 	cout<<"FINE"<<endl;
 	free(server_sessionkey);
+	free(client_sessionkey);
 	free(buffer);
 	free(aad);
 	free(message);

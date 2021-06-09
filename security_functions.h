@@ -15,6 +15,7 @@
 #define NONCE_SIZE 4
 #define MAX_CLIENTS 20
 #define MSGHEADER 34
+#define COMMAND_LEN 8
 using namespace std;
 
 //Authencrypt parameters
@@ -186,9 +187,11 @@ unsigned int dh_generate_session_key(unsigned char *shared_secret,unsigned int s
 
 
 //Authenticated Encryption/Decryption
-unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len, unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, unsigned char *output_buffer){
+unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len, unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, unsigned char *output_buffer, bool op=true){
 	if(input_len > MAX_SIZE || aad_len > MAX_SIZE) {cerr<<"Auth encrypt: Aad or plaintext too big";return -1;}
-	if(input_len + aad_len > MAX_SIZE-AE_block_size-sizeof(unsigned int)-AE_iv_len-AE_tag_len-sizeof(short)) {cerr<<"Auth encrypt: Packet is too big";return -1;}
+	unsigned int opsize=0;
+	if(op) opsize=sizeof(short);
+	if(input_len + aad_len > MAX_SIZE-AE_block_size-sizeof(unsigned int)-AE_iv_len-AE_tag_len-opsize) {cerr<<"Auth encrypt: Packet is too big";return -1;}
 	int ret;
 	unsigned char *iv = (unsigned char *)malloc(AE_iv_len);
 	if(!iv) {cerr<<"auth encrypt: iv Malloc Error";exit(1);}
@@ -204,8 +207,8 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	if(!tag) {cerr<<"auth encrypt: tag Malloc Error";exit(1);}
 	unsigned char* complete_aad=(unsigned char*)malloc(sizeof(short)+aad_len);
 	if(!complete_aad) {cerr<<"auth encrypt: true_aad Malloc Error";exit(1);}
-	memcpy(complete_aad,&opcode,sizeof(short));
-	memcpy(complete_aad+sizeof(short),aad,aad_len);
+	if(op)	memcpy(complete_aad,&opcode,opsize);
+	memcpy(complete_aad+opsize,aad,aad_len);
 	// Create and initialise the context
 	if(!(ctx = EVP_CIPHER_CTX_new()))
 	handleErrors();
@@ -214,7 +217,7 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	handleErrors();
 	
 	//Provide any AAD data. This can be called zero or more times as required
-	if(1 != EVP_EncryptUpdate(ctx, NULL, &len, complete_aad,aad_len+sizeof(short)))
+	if(1 != EVP_EncryptUpdate(ctx, NULL, &len, complete_aad,aad_len+opsize))
 	handleErrors();
 
 	if(1 != EVP_EncryptUpdate(ctx, ciphertext, &len, input_buffer, input_len))
@@ -227,10 +230,10 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	/* Get the tag */
 	if(1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, AE_tag_len, tag))
 	handleErrors();
-	unsigned int output_len = AE_tag_len + ciphertext_len + AE_iv_len+ aad_len+ sizeof(unsigned int) + sizeof(short);
+	unsigned int output_len = AE_tag_len + ciphertext_len + AE_iv_len+ aad_len+ sizeof(unsigned int) + opsize;
 	unsigned int written=0;
-	memcpy(output_buffer,  (unsigned char *)&opcode, sizeof(short));
-	written+=sizeof(short);
+	if(op) memcpy(output_buffer,  (unsigned char *)&opcode, opsize);
+	written+=opsize;
 	memcpy(output_buffer + written, tag, AE_tag_len);
 	written+=AE_tag_len;
 	memcpy(output_buffer + written, iv, AE_iv_len);
@@ -249,14 +252,15 @@ unsigned int auth_encrypt(short opcode, unsigned char *aad, unsigned int aad_len
 	return written;
 	}
 
-int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, short &opcode, unsigned char *output_aad, unsigned int &aad_len, unsigned char* output_buffer){
-	
-	if(input_len <= AE_iv_len+AE_tag_len+sizeof(short)) { cerr << "Error auth decrypt: malformed or empty message.\n"; return -1; }
+int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned char* shared_key, short &opcode, unsigned char *output_aad, unsigned int &aad_len, unsigned char* output_buffer,bool op=true){
+	unsigned int opsize=0;
+	if(op)	opsize=sizeof(short);
+	if(input_len <= AE_iv_len+AE_tag_len+opsize) { cerr << "Error auth decrypt: malformed or empty message.\n"; return -1; }
 	if(input_len > MAX_SIZE) {cerr<<"Auth decrypt: Packet too big";return -1;}
 	EVP_CIPHER_CTX *ctx;
 	unsigned int read=0;
-	opcode=*(short*)(input_buffer);
-	read+=sizeof(short);
+	if(op)	opcode=*(short*)(input_buffer);
+	read+=opsize;
 	unsigned int output_len = 0;
 	unsigned char *iv = (unsigned char *)malloc(AE_iv_len);
 	if(!iv) {cerr<<"auth decrypt: iv Malloc Error";exit(1);}
@@ -272,10 +276,10 @@ int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned c
 	if(aad_len>MSG_MAX) {cerr<<"Auth decrypt: Aad too big";return -1;}
 	memcpy(output_aad, input_buffer + read, aad_len);
 	read+=aad_len;
-	unsigned char* complete_aad=(unsigned char*)malloc(sizeof(short)+aad_len);
+	unsigned char* complete_aad=(unsigned char*)malloc(opsize+aad_len);
 	if(!complete_aad) {cerr<<"auth encrypt: true_aad Malloc Error";exit(1);}
-	memcpy(complete_aad, &opcode,sizeof(short));
-	memcpy(complete_aad+sizeof(short),output_aad,aad_len);
+	if(op) memcpy(complete_aad, &opcode,opsize);
+	memcpy(complete_aad+opsize,output_aad,aad_len);
 	unsigned int ciphertext_len = input_len - read;
 	if(ciphertext_len>MSG_MAX) {cerr<<"Auth decrypt: ciphertext too big";return -1;}
 	unsigned char* ciphertext = (unsigned char *)malloc(ciphertext_len);
@@ -289,7 +293,7 @@ int auth_decrypt(unsigned char *input_buffer, unsigned int input_len, unsigned c
 	if(!EVP_DecryptInit(ctx, AE_cipher, shared_key, iv))
 	handleErrors();
 	//Provide any AAD data.
-	if(!EVP_DecryptUpdate(ctx, NULL, &len, complete_aad, sizeof(short)+aad_len))
+	if(!EVP_DecryptUpdate(ctx, NULL, &len, complete_aad, opsize+aad_len))
 	handleErrors();
 	//Provide the message to be decrypted, and obtain the plaintext output.
 	if(!EVP_DecryptUpdate(ctx, output_buffer, &len, ciphertext, ciphertext_len))
