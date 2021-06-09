@@ -5,7 +5,7 @@ Group project for the Foundations of Cybersecurity course of the Artificial Inte
 ### Project by @GSilvestri92 @matildao-pane @ragnar1992
 
 ## Introduction
-This a secure client server application: the messages exchanged are signed and encrypted using the OPENSSL library.
+This a secure client server application: the messages exchanged are signed and encrypted using the OpenSSL library.
 
 The multi threaded server can handle multiple clients connected at the same time.
 
