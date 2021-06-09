@@ -136,6 +136,8 @@ void *client_handler(void* arguments) {
 	if(!buffer){cerr<<"establishSession: buffer Malloc Error";exit(1);}
 	unsigned char* message = (unsigned char*)malloc(MAX_SIZE);
 	if(!message){cerr<<"establishSession: message Malloc Error";exit(1);}
+	unsigned char* aad = (unsigned char*)malloc(MAX_SIZE);
+	if(!aad){cerr<<"establishSession: message Malloc Error";exit(1);}
 
 
 // SESSION ESTABLISHMENT
@@ -149,7 +151,7 @@ void *client_handler(void* arguments) {
 	fclose(file);
 	//receive signature
 
-	unsigned int message_size=receive_message(socket, buffer);
+	int message_size=receive_message(socket, buffer);
 	if(message_size==0) {cerr<<"establishSession: receive signed message error";exit(1);}
 
 	unsigned int sgnt_size=*(unsigned int*)buffer;
@@ -268,24 +270,103 @@ void *client_handler(void* arguments) {
 	cout<<1<<endl;	
 	args->sessionkey=sessionkey;
 	short opcode;
+	unsigned int aadlen;
+	unsigned int msglen;
 	myuser->online=true;
-	/////////////
-	cout<<3<<endl;	
 	send_userlist(socket,*myuser,sessionkey);
-	cout<<4<<endl;	
-	unsigned char* buffissimo=(unsigned char*)malloc(MAX_SIZE);
-	ret=receive_message(socket, buffissimo);
-	cout<<buffissimo<<endl;
 	/*pthread_t outputmanager;
 	if( pthread_create(&outputmanager, NULL, &outputqueue_handler, (void *)args)  != 0 )
 		printf("Failed to create thread\n");
 	while(!(myuser->done))
 	{
-		
+		message_size=receive_message(socket,buffer);
+		unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
+		if(received_counter==srv_rcv_counter){
+			ret=auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+			pthread_mutex_lock(&mutex);
+			increment_counter(myuser->recv_counter);
+			pthread_mutex_unlock(&mutex);
+			switch(opcode)
+			{
+				case 0:
+				{
+					//logout (devo comunicare ad eventuale chat partner?)
+					cout<<myuser->nickname<<" has exited."<<endl;
+					myuser->done=true;
+					
+				}break;
+				case 1:
+					send_userlist(socket,*myuser,sessionkey);
+				break;
+				case 2:
+				{
+					Packet rtt;					
+					strncpy(rtt.source,myuser->nickname,USERNAME_SIZE);
+					strncpy(rtt.dest,message,USERNAME_SIZE);
+					rtt.msgsize=0;
+					rtt.opcode=opcode;
+					pthread_mutex_lock(&mutex);
+					myuser->inputqueue.push(rtt);
+					pthread_mutex_unlock(&mutex);
+				}break;
+				case 3:
+				{
+					//ACCEPT
+					Packet key;					
+					strncpy(key.source,myuser->nickname,USERNAME_SIZE);
+					strncpy(mex.dest,message,USERNAME_SIZE);
+					mex.msgsize=//Size della chiave
+					mex.msg=(unsigned char*) malloc(msgsize);
+					if(!mex.msg){cerr<<"msg malloc error"; exit(1);}
+					//qua ci va bio blablabla della mia chiave
+					memcpy(mex.msg,myuserkey,msgsize);
+					mex.opcode=opcode;
+					pthread_mutex_lock(&mutex);
+					myuser->inputqueue.push(mex);
+					pthread_mutex_unlock(&mutex);
+				
+					//qua ci va bio blablabla della chiave dell'altro tipo
+					message_size=auth_encrypt(opcode,counter+chiavealtrotipo, dimchiave+sizeof(unsigned int), message, ret , sessionkey, buffer);
+					if (ret>=0)
+						{
+							send_message(socket,message_size,buffer);
+							myuser->online=false;
+						}
+				}break;
+				case 4:
+				{
+					Packet refusal;					
+					strncpy(refusal.source,myuser->nickname,USERNAME_SIZE);
+					strncpy(refusal.dest,message,USERNAME_SIZE);
+					mex.msgsize=0
+					mex.opcode=opcode;
+					pthread_mutex_lock(&mutex);
+					myuser->inputqueue.push(mex);
+					pthread_mutex_unlock(&mutex);
+				}break;
+				case 5:
+				{
+					Packet mex;					
+					strncpy(mex.source,myuser->nickname,USERNAME_SIZE);
+					strncpy(mex.dest,message,USERNAME_SIZE);
+					mex.msgsize=aadlen-sizeof(unsigned int);
+					mex.msg=(unsigned char*) malloc(msgsize);
+					if(!mex.msg){cerr<<"msg malloc error"; exit(1);}
+					memcpy(mex.msg,aad+sizeof(unsigned int),msgsize);
+					mex.opcode=opcode;
+					pthread_mutex_lock(&mutex);
+					myuser->inputqueue.push(mex);
+					pthread_mutex_unlock(&mutex);
+				}break;
+	
+			}
 	}
 	pthread_join(outputmanager,NULL);
 	*/
 	free(sessionkey);
+	free(buffer);
+	free(aad);
+	free(message);
 	close(socket);
 	cout<<myuser->nickname<<" has exited."<<endl;
 	myuser->done=true;	

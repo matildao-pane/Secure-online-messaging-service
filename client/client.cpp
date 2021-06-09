@@ -241,16 +241,16 @@ int main(int argc, char *argv[]){
 //////////	
 	unsigned int srv_rcv_counter=0, srv_counter=0;
 	short opcode;
+	unsigned int aadlen;
+	unsigned int msglen;
 /////////
 	//DA PROVARE
 	message_size=receive_message(sockfd,buffer);
-	unsigned int recieved=*(unsigned int*)(buffer+34);
-	if(recieved!=srv_rcv_counter){cerr<<"Invalid Counter"; exit(1);}
-	srv_rcv_counter++;
-	unsigned int aadlen;
-	unsigned int msglen;
-	ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
-	if (ret>=0) print_users_list(message,ret);
+	unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
+	if(received_counter==srv_rcv_counter){
+		ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+		increment_counter(srv_rcv_counter);
+		if (ret>=0) print_users_list(message,ret);
 /////////
 	char bho[100];
 	cin>>bho;

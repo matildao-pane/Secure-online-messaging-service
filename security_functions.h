@@ -14,6 +14,7 @@
 #define MSG_MAX 10000
 #define NONCE_SIZE 4
 #define MAX_CLIENTS 20
+#define MSGHEADER 34
 using namespace std;
 
 //Authencrypt parameters
