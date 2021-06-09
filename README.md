@@ -33,20 +33,19 @@ OPCODE# | Name | Meaning
 Sequence diagram of the preliminar authenticaation phase:
 ![flow_Auth](/Documentation/Flow_1_Server_Auth.png)
 
-#### Messages structure:
-- Message **1.0**:
+#### Message **1.0**:
 
 ![mex10](/Documentation/1.0.png)
 
-- Message **1.1**:
+#### Message **1.1**:
 
 ![mex11](/Documentation/1.1.png)
 
-- Message **1.2**:
+#### Message **1.2**:
 
 ![mex12](/Documentation/1.2.png)
 
-- Message **1.3** Send available user list:  DOMANDA: MA LA ADD_LEN NN è AUTENTICATA VERO? XK NELL DIGSIGN VIENE MESSA NELL OUTPUT BUFF DOPO
+#### Message **1.3** Send available user list:  DOMANDA: MA LA ADD_LEN NN è AUTENTICATA VERO? XK NELL DIGSIGN VIENE MESSA NELL OUTPUT BUFF DOPO
 
 ![mex13opcodeLIST](/Documentation/1.3_opcodeLIST.png)
 
@@ -62,34 +61,32 @@ Sequence diagram to send an RTT, accept it or refuse it, then starting the comun
 
 ![flow_Op234](/Documentation/opcode234.png)
 
-#### Messages structure:
-
-- Messages with opcode **0**:
+#### Messages with OPCODE **0**:
 
  
 
-- Messages with opcode **1**:
+#### Messages with OPCODE **1**:
 
  
 
-- Messages with opcode **2** RTT FROM CLIENT TO SERVER:
+#### Messages with OPCODE **2** RTT FROM CLIENT TO SERVER:
 
 ![opcode2_RTT_C_S](/Documentation/opcode2_RTT_C_S.png)
 
-- Messages with opcode **2** RTT from SERVER to CLIENT:
+#### Messages with OPCODE **2** RTT from SERVER to CLIENT:
 
 ![opcode2_RTT_S_C](/Documentation/opcode2_RTT_S_C.png)
 
 
-- Messages with opcode **3** ACCEPT from CLIENT to SERVER, and from SERVER to CLIENT:   DOMANDA: RICONTROLLARE BENE
+#### Messages with OPCODE **3** ACCEPT from CLIENT to SERVER, and from SERVER to CLIENT:   DOMANDA: RICONTROLLARE BENE
 
  ![opcode3_ACCEPT](/Documentation/opcode3_ACCEPT.png)
  
 
-- Messages with opcode **4**:
+#### Messages with OPCODE **4**:
 
 
-- Messages with opcode **5**:
+#### Messages with OPCODE **5**:
 
 ![opcode5](/Documentation/opcode5.png)
 
