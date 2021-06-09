@@ -27,11 +27,13 @@ OPCODE# | Name | Meaning
  
 ### Authentication phase:
 
+#### Sequence diagram:
+
 Sequence diagram of the preliminar authenticaation phase:
 ![flow_Auth](/Documentation/Flow_1_Server_Auth.png)
 
-#### Message structure:
-- Message 1.0:
+#### Messages structure:
+- Message #1.0#:
 
 ![mex10](/Documentation/1.0.png)
 
@@ -44,13 +46,16 @@ Sequence diagram of the preliminar authenticaation phase:
 ![mex12](/Documentation/1.2.png)
 
 ### Coumincation phase:
+
+#### Sequence diagram:
+
 Sequence diagrams of the comunication phase:
 
 ![flow_Op1](/Documentation/opcode1.png)
 
 ![flow_Op234](/Documentation/opcode234.png)
 
-Messages structure:
+#### Messages structure:
 
 - Message with opcode 01234:
 
