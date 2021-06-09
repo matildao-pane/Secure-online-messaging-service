@@ -39,7 +39,7 @@ struct Packet{
 struct User{
 	char nickname[USERNAME_SIZE];
 	char peer_nickname[USERNAME_SIZE];
-	queue<Packet> input_queue;
+	queue<Packet> inputqueue;
 	queue<Packet> outputqueue;
 	unsigned int send_counter=0;
 	unsigned int recv_counter=0;
@@ -272,7 +272,7 @@ void *client_handler(void* arguments) {
 	unsigned int aadlen;
 	unsigned int msglen;
 	myuser->online=true;
-	send_userlist(socket,*myuser,sessionkey);
+	send_userlist(socket,myuser,sessionkey);
 	pthread_t outputmanager;
 	if( pthread_create(&outputmanager, NULL, &outputqueue_handler, (void *)args)  != 0 )
 		printf("Failed to create thread\n");
@@ -283,8 +283,8 @@ void *client_handler(void* arguments) {
 		pthread_mutex_lock(&mutex);
 		message_size=receive_message(socket,buffer);
 		unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
-		if(received_counter==srv_rcv_counter){
-			ret=auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+		if(received_counter==myuser->recv_counter){
+			ret=auth_decrypt(buffer, message_size, sessionkey,opcode, aad, aadlen, message);
 			increment_counter(myuser->recv_counter);
 			pthread_mutex_unlock(&mutex);
 			switch(opcode){
@@ -307,7 +307,7 @@ void *client_handler(void* arguments) {
 					
 				}break;
 				case 1:
-					send_userlist(socket,*myuser,sessionkey);
+					send_userlist(socket,myuser,sessionkey);
 				break;
 				case 2:
 				{	
@@ -316,7 +316,7 @@ void *client_handler(void* arguments) {
 						myuser->online=false;
 						Packet rtt;					
 						strncpy(rtt.source,myuser->nickname,USERNAME_SIZE);
-						strncpy(rtt.dest,message,USERNAME_SIZE);
+						memcpy(rtt.dest,message,USERNAME_SIZE);
 						rtt.msgsize=0;
 						rtt.opcode=opcode;
 						myuser->inputqueue.push(rtt);
@@ -330,22 +330,22 @@ void *client_handler(void* arguments) {
 						Packet key;
 						char peerusername[USERNAME_SIZE];					
 						strncpy(key.source,myuser->nickname,USERNAME_SIZE);
-						strncpy(key.dest,message,USERNAME_SIZE);
-						strncpy(peerusername,message,USERNAME_SIZE);	
-						strncpy(myuser_peernickname,message,USERNAME_SIZE);			
+						memcpy(key.dest,message,USERNAME_SIZE);
+						memcpy(peerusername,message,USERNAME_SIZE);	
+						memcpy(myuser->peer_nickname,message,USERNAME_SIZE);			
 						BIO* mybio = BIO_new(BIO_s_mem());
 						PEM_write_bio_PUBKEY(mybio,client_pubkey);
 						char* mypubkey_buf=NULL;
 						long pubkey_size =BIO_get_mem_data(mybio,&mypubkey_buf);
-						mex.msg=(unsigned char*) malloc((int)pubkey_size);
-						if(!mex.msg){cerr<<"msg malloc error"; exit(1);}
-						mex.msgsize=(unsigned int)pubkey_size+aadlen;
-						memcpy(mex.msg,(unsigned char*) &pubkey_size,sizeof(long));
-						memcpy(mex.msg+sizeof(long),mypubkey_buf,(int)pubkey_size);
+						key.msg=(unsigned char*) malloc((int)pubkey_size);
+						if(!key.msg){cerr<<"msg malloc error"; exit(1);}
+						key.msgsize=(unsigned int)pubkey_size+aadlen;
+						memcpy(key.msg,(unsigned char*) &pubkey_size,sizeof(long));
+						memcpy(key.msg+sizeof(long),mypubkey_buf,(int)pubkey_size);
 						// copio ecdhpubkey firmata da myuser nel messaggio per il peer
-						memcpy(mex.msg+pubkeysize+sizeof(long),aad+sizeof(unsigned int),aadlen-sizeof(unsigned int);
+						memcpy(key.msg+pubkeysize+sizeof(long),aad+sizeof(unsigned int),aadlen-sizeof(unsigned int));
 						BIO_free(mybio);
-						mex.opcode=opcode;		
+						key.opcode=opcode;		
 						string fname = "pubkeys/"+(string)peerusername+".pem";
 						//Get user pubkey
 						EVP_PKEY* peer_pubkey;
@@ -360,18 +360,18 @@ void *client_handler(void* arguments) {
 						PEM_write_bio_PUBKEY(thatbio,peer_pubkey);
 						char* thatpubkey_buf=NULL;
 						pubkey_size =BIO_get_mem_data(thatbio,&thatpubkey_buf);
-						unsigned int newaadlen+=(unsigned int)pubkey_size+sizeof(unsigned int);
+						unsigned int newaadlen=(unsigned int)pubkey_size+sizeof(unsigned int);
 						unsigned char* newaad=(unsigned char*) malloc(newaadlen);
 						if(!newaad){cerr<<"msg malloc error"; exit(1);}
-						memcpy(newaad,(unsigned char*) &myuser->counter,sizeof(unsigned int));
+						memcpy(newaad,(unsigned char*) &myuser->send_counter,sizeof(unsigned int));
 						memcpy(newaad+sizeof(unsigned int),thatpubkey_buf,(int)pubkey_size);
 						BIO_free(thatbio);
 						free(peer_pubkey);
-						message_size=auth_encrypt(opcode,newaad, newaadlen, message, strlen(message)+1 , sessionkey, buffer);
+						message_size=auth_encrypt(opcode,newaad, newaadlen, message, ret , sessionkey, buffer);
 						free(newaad);
 						if (message_size>=0)
 							{	
-								myuser->inputqueue.push(mex);
+								myuser->inputqueue.push(key);
 								send_message(socket,message_size,buffer);
 								increment_counter(myuser->send_counter);
 								myuser->online=false;
@@ -384,11 +384,11 @@ void *client_handler(void* arguments) {
 					if(!myuser->paired){
 						Packet refusal;					
 						strncpy(refusal.source,myuser->nickname,USERNAME_SIZE);
-						strncpy(refusal.dest,message,USERNAME_SIZE);
-						mex.msgsize=0
-						mex.opcode=opcode;
+						memcpy(refusal.dest,message,USERNAME_SIZE);
+						refusal.msgsize=0;
+						refusal.opcode=opcode;
 						myuser->online=true;
-						myuser->inputqueue.push(mex);
+						myuser->inputqueue.push(refusal);
 					}
 					pthread_mutex_unlock(&mutex);
 				}break;
@@ -398,11 +398,11 @@ void *client_handler(void* arguments) {
 					if(myuser->paired){
 						Packet mex;					
 						strncpy(mex.source,myuser->nickname,USERNAME_SIZE);
-						strncpy(mex.dest,message,USERNAME_SIZE);
+						memcpy(mex.dest,message,USERNAME_SIZE);
 						mex.msgsize=aadlen-sizeof(unsigned int);
-						mex.msg=(unsigned char*) malloc(msgsize);
+						mex.msg=(unsigned char*) malloc(mex.msgsize);
 						if(!mex.msg){cerr<<"msg malloc error"; exit(1);}
-						memcpy(mex.msg,aad+sizeof(unsigned int),msgsize);
+						memcpy(mex.msg,aad+sizeof(unsigned int),mex.msgsize);
 						mex.opcode=opcode;
 						myuser->inputqueue.push(mex);
 						
@@ -414,7 +414,7 @@ void *client_handler(void* arguments) {
 			pthread_mutex_lock(&mutex);
 			done=myuser->done;
 			pthread_mutex_unlock(&mutex);
-	}
+	}else pthread_mutex_unlock(&mutex);
 	pthread_join(outputmanager,NULL);
 	EVP_PKEY_free(client_pubkey);
 	free(sessionkey);
@@ -486,9 +486,9 @@ int main(int argc, char *argv[]){
 	int i=0;	
 	for(list<User>::iterator it=userlist.begin(); it != userlist.end();it++){
 		//Check for messages in input queues and move them to dest outputqueue.				
-		while(!(it->input_queue.empty())){
-			Packet message = it->input_queue.front();
-			it->input_queue.pop();
+		while(!(it->inputqueue.empty())){
+			Packet message = it->inputqueue.front();
+			it->inputqueue.pop();
 			for(list<User>::iterator it2=userlist.begin(); it2 != userlist.end();it2++){
 				if(strcmp(message.dest, it2->nickname) == 0){
 					it2->outputqueue.push(message);
