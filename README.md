@@ -66,11 +66,11 @@ Sequence diagram to send an RTT, accept it or refuse it, then starting the comun
 
 - Messages with opcode **0**:
 
-![opcode01234](/Documentation/opc4.png)
+ 
 
 - Messages with opcode **1**:
 
-![opcode01234](/Documentation/ .png)
+ 
 
 - Messages with opcode **2** RTT FROM CLIENT TO SERVER:
 
@@ -78,11 +78,11 @@ Sequence diagram to send an RTT, accept it or refuse it, then starting the comun
 
 - Messages with opcode **3**:
 
-![opcode01234](/Documentation/o 1234.png)
+ 
 
 - Messages with opcode **4**:
 
-![opcode01234](/Documentation/opc 1234.png)
+ 
 
 
 - Messages with opcode **5**:
