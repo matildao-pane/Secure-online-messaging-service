@@ -411,10 +411,11 @@ void *client_handler(void* arguments) {
 				}break;
 				
 			}
-			pthread_mutex_lock(&mutex);
-			done=myuser->done;
-			pthread_mutex_unlock(&mutex);
-	}else pthread_mutex_unlock(&mutex);
+		}else pthread_mutex_unlock(&mutex);
+		pthread_mutex_lock(&mutex);
+		done=myuser->done;
+		pthread_mutex_unlock(&mutex);
+	}
 	pthread_join(outputmanager,NULL);
 	EVP_PKEY_free(client_pubkey);
 	free(sessionkey);
