@@ -46,7 +46,7 @@ Sequence diagram of the preliminar authenticaation phase:
 
 ![mex12](/Documentation/1.2.png)
 
-- Message **1.3**:
+- Message **1.3** Send available user list:
 
 ![mex13opcodeLIST](/Documentation/1.3_opcodeLIST.png)
 
