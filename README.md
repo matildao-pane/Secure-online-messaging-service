@@ -45,8 +45,7 @@ Sequence diagram of the preliminar authenticaation phase:
 
 ![mex12](/Documentation/1.2.png)
 
-#### Message **1.3** Send available user list:  DOMANDA: MA LA ADD_LEN NN è AUTENTICATA VERO? XK NELL DIGSIGN VIENE MESSA NELL OUTPUT BUFF DOPO
-
+#### Message **1.3** Send available user list: 
 ![mex13opcodeLIST](/Documentation/1.3_opcodeLIST.png)
 
 ### Comunication phase:
