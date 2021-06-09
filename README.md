@@ -32,15 +32,15 @@ Sequence diagram of the preliminar authenticaation phase:
 
 #### Message structure:
 - Message 1.0:
-- 
+
 ![mex10](/Documentation/1.0.png)
 
 - Message 1.1:
-- 
+
 ![mex11](/Documentation/1.1.png)
 
 - Message 1.2:
-- 
+
 ![mex12](/Documentation/1.2.png)
 
 ### Coumincation phase:
@@ -53,11 +53,11 @@ Sequence diagrams of the comunication phase:
 Messages structure:
 
 - Message with opcode 01234:
-- 
+
 ![opcode01234](/Documentation/opcode01234.png)
 
 - Message with opcode 5:
-- 
+
 ![opcode5](/Documentation/opcode5.png)
 
 
