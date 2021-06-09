@@ -5,9 +5,13 @@ Group project for the Foundations of Cybersecurity course of the Artificial Inte
 
 ## Introduction
 This a client server application.
+
 The multithreaded server can handle multiple clients connected at the same time.
+
 For every new connection the server creates a new thread which will comunicate with its associated client.
+
 After a preliminar authentication phase whith the incoming clients, the server main thread forwards the messages received from the sending client to the destination client.
+
 The multithreaded client can send and receive message in parallel.
 
 ### Opcodes:
@@ -28,21 +32,32 @@ Sequence diagram of the preliminar authenticaation phase:
 
 #### Message structure:
 - Message 1.0:
+- 
 ![mex10](/Documentation/1.0.png)
+
 - Message 1.1:
+- 
 ![mex11](/Documentation/1.1.png)
+
 - Message 1.2:
+- 
 ![mex12](/Documentation/1.2.png)
 
 ### Coumincation phase:
 Sequence diagrams of the comunication phase:
+
 ![flow_Op1](/Documentation/opcode1.png)
+
 ![flow_Op234](/Documentation/opcode234.png)
 
 Messages structure:
+
 - Message with opcode 01234:
+- 
 ![opcode01234](/Documentation/opcode01234.png)
+
 - Message with opcode 5:
+- 
 ![opcode5](/Documentation/opcode5.png)
 
 
