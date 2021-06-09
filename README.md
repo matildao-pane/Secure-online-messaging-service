@@ -76,18 +76,17 @@ Sequence diagram to send an RTT, accept it or refuse it, then starting the comun
 
 ![opcode2_RTT_C_S](/Documentation/opcode2_RTT_C_S.png)
 
-- Messages with opcode **2** RTT FROM SERVER TO CLIENT:
+- Messages with opcode **2** RTT from SERVER to CLIENT:
 
 ![opcode2_RTT_S_C](/Documentation/opcode2_RTT_S_C.png)
 
 
-- Messages with opcode **3**:
+- Messages with opcode **3** ACCEPT from CLIENT to SERVER, and from SERVER to CLIENT:   DOMANDA: RICONTROLLARE BENE
 
+ ![opcode2_ACCEPT](/Documentation/opcode2_ACCEPT.png)
  
 
 - Messages with opcode **4**:
-
- 
 
 
 - Messages with opcode **5**:
