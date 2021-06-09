@@ -50,9 +50,11 @@ Sequence diagram of the preliminar authenticaation phase:
 
 #### Sequence diagram:
 
-Sequence diagrams of the comunication phase:
+Sequence diagram to request the user list:
 
 ![flow_Op1](/Documentation/opcode1.png)
+
+Sequence diagram to send an RTT, accept it or refuse it, then starting the comunication with the other user:
 
 ![flow_Op234](/Documentation/opcode234.png)
 
