@@ -119,6 +119,9 @@ void *outputqueue_handler(void* arguments){
 				if(message.opcode == 4){
 					myuser->online=true;
 				}
+				if(message.opcode == 6){
+					cout<<"forward ecdhpubkey rttsender->accepter"
+				}
 				else if (message.opcode == 2){
 					myuser->online=false;
 				}
@@ -319,7 +322,6 @@ void *client_handler(void* arguments) {
 					}break;
 					case 1:
 					{
-						cout<<"caso1"<<endl;
 						send_userlist(socket,myuser,sessionkey);
 					}break;
 					case 2://rtt
@@ -363,14 +365,14 @@ void *client_handler(void* arguments) {
 							PEM_write_bio_PUBKEY(mybio,client_pubkey);
 							char* mypubkey_buf=NULL;
 							long pubkey_size =BIO_get_mem_data(mybio,&mypubkey_buf);
-							key.msg=(unsigned char*) malloc((int)pubkey_size);
+							key.msg=(unsigned char*) malloc(((int)pubkey_size)+sizeof(long)+aadlen-sizeof(unsigned int));
 							if(!key.msg){cerr<<"msg malloc error"; exit(1);}
-							key.msgsize=(unsigned int)pubkey_size+aadlen;
-				 
+							key.msgsize=pubkey_size+aadlen+sizeof(long)-sizeof(unsigned int);
+							cout<<key.msgsize<<", signed part: "<<aadlen-sizeof(unsigned int)<<", key: "<<pubkey_size<<endl;   
 							memcpy(key.msg,(unsigned char*) &pubkey_size,sizeof(long));
-							memcpy(key.msg+sizeof(long),mypubkey_buf,(int)pubkey_size);
+							memcpy(key.msg+sizeof(long),mypubkey_buf,pubkey_size);
 							// copio ecdhpubkey firmata da myuser nel messaggio per il peer
-							memcpy(key.msg+pubkeysize+sizeof(long),aad+sizeof(unsigned int),aadlen-sizeof(unsigned int));
+							memcpy(key.msg+pubkey_size+sizeof(long),aad+sizeof(unsigned int),aadlen-sizeof(unsigned int));
 							BIO_free(mybio);					 
 							key.opcode=opcode;		
 							string fname = "pubkeys/"+(string)peerusername+".pem";
@@ -378,41 +380,34 @@ void *client_handler(void* arguments) {
 							FILE* file2 = fopen( fname.c_str(), "r");
 							if(!file2) {
 								cerr<<"Accept: Incorrect peer Username";
-								fclose(file2);
+								
 							}   
 							else{ 
 								EVP_PKEY* peer_pubkey = PEM_read_PUBKEY(file2, NULL, NULL, NULL);
-								cout<<"qui3"<<endl;
 								if(!peer_pubkey) {cerr<<"Accept: Pubkey Error";exit(1);}
-								fclose(file2);
-									cout<<"qui1"<<endl;
 								BIO* thatbio = BIO_new(BIO_s_mem());
 								PEM_write_bio_PUBKEY(thatbio,peer_pubkey);
 								char* thatpubkey_buf=NULL;
-									cout<<"qui1"<<endl;
 								pubkey_size =BIO_get_mem_data(thatbio,&thatpubkey_buf);
 								unsigned int newaadlen=(unsigned int)pubkey_size+sizeof(unsigned int);
 								unsigned char* newaad=(unsigned char*) malloc(newaadlen);
 								if(!newaad){cerr<<"msg malloc error"; exit(1);}
-									cout<<"qui1"<<endl;
 								memcpy(newaad,(unsigned char*) &myuser->send_counter,sizeof(unsigned int));
 								memcpy(newaad+sizeof(unsigned int),thatpubkey_buf,(int)pubkey_size);
 								BIO_free(thatbio);
-								cout<<"qui1"<<endl;
 								free(peer_pubkey);
 								message_size=auth_encrypt(6,newaad, newaadlen, message, ret , sessionkey, buffer); //send peer_pubkey 
 								free(newaad);
 								if (message_size>=0)
 									{	
-										cout<<"qui1"<<endl;
 										myuser->inputqueue.push(key);
 										send_message(socket,message_size,buffer);
-										cout<<"sent pubkey: "<<peerusername<<endl;
+										cout<<"sent pubkey of: "<<peerusername<<endl;
 										increment_counter(myuser->send_counter);
 										myuser->paired=true;
 										myuser->online=false;
 									}
-							}
+							}fclose(file2);
 						}
 						
 					}break;

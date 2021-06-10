@@ -124,7 +124,10 @@ int digsign_verify(EVP_PKEY* peer_pubkey, unsigned char* input_buffer, unsigned 
 	if(ret == 0){ cerr << "Error: EVP_VerifyUpdate returned " << ret << "\n"; exit(1); }
 	ret = EVP_VerifyFinal(md_ctx, signature_buffer, sgnt_size, peer_pubkey);
 	if(ret == -1){ // it is 0 if invalid signature, -1 if some other error, 1 if success.
-	cerr << "Error: EVP_VerifyFinal returned " << ret << " (invalid signature?)\n";  exit(1);
+	cerr << "Error: EVP_VerifyFinal returned " << ret << " (invalid signature?)\n";
+	ERR_error_string_n(ERR_get_error(),(char *)output_buffer,MAX_SIZE);  
+	cerr<< output_buffer<<"\n";
+	exit(1);
 	}else if(ret == 0){      cerr << "Error: Invalid signature!\n"; return -1;
 	}
 

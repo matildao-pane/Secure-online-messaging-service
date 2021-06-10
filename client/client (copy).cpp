@@ -139,15 +139,9 @@ int establishSessionAccepted(EVP_PKEY* user_key,unsigned char* sessionkey, unsig
 	BIO_write(bio, signed_buffer+sizeof(unsigned int)+sizeof(long), pubkey_size);
 	EVP_PKEY* peerpubkey= PEM_read_bio_PUBKEY(bio, NULL, NULL, NULL);
 	BIO_free(bio);
-	unsigned int signedsize=buffer_size-pubkey_size-sizeof(long)-sizeof(unsigned int);
 	unsigned char* message = (unsigned char*)malloc(MAX_SIZE);
 	if(!message){cerr<<" message Malloc Error";exit(1);}
-	unsigned char* temp= (unsigned char*)malloc(signedsize);
-	if(!temp){cerr<<" message Malloc Error";exit(1);}
-	cout<<buffer_size<<", signed part: "<<signedsize<<" "<<pubkey_size<<endl;
-	memcpy(temp,signed_buffer+sizeof(long)+pubkey_size+sizeof(unsigned int),signedsize);
-	cout<<*(unsigned int*)temp<<endl; 
-	int message_size= digsign_verify(peerpubkey,temp,signedsize,message);
+	int message_size= digsign_verify(peerpubkey,signed_buffer+pubkey_size+sizeof(unsigned int)+sizeof(long),buffer_size-pubkey_size-sizeof(long)-sizeof(unsigned int),message);
 	if(message_size<=0){cerr<<"signature is invalid"; return -1;}
 	unsigned char* nonce=(unsigned char*) malloc(NONCE_SIZE);
 	if(!nonce){cerr<<"nonce Malloc Error";exit(1);}
@@ -225,6 +219,7 @@ void *recv_handler(void* arguments){
 	while(!done){
 		pthread_mutex_lock(&dhmutex);	
 		message_size=receive_message(socket,buffer);
+		cout<<"sbagliato"<<endl;
 		pthread_mutex_lock(&mutex);	
 		if(message_size>0){
 			unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
@@ -295,7 +290,6 @@ void *recv_handler(void* arguments){
 						}break;
 						case 6:
 						{
-							cout<<"received pubkey of: "<<message<<endl;
 							long pubkey_size=*(long*) (aad+sizeof(unsigned int));
 							BIO* bio= BIO_new(BIO_s_mem());
 							BIO_write(bio, aad+sizeof(unsigned int)+sizeof(long), pubkey_size);
@@ -546,10 +540,10 @@ int main(int argc, char *argv[]){
 					increment_counter(srv_counter);
 					cout<<"sent first my ecdh pubkey: "<<buffer<<endl;
 					
-					pthread_mutex_lock(&dhmutex);
-					cout<<"waiting for ecdhpubkey"<<endl; 
+					pthread_mutex_lock(&dhmutex); 
 					//aspetta altro messaggio 6 con ecdhpubkey
 					message_size=receive_message(sockfd,buffer);
+					cout<<"giusto"<<endl;
 					if(message_size>0){
 						unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
 						if(received_counter==srv_rcv_counter){
