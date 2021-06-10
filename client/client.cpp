@@ -21,7 +21,7 @@
 
 pthread_mutex_t mutex;
 pthread_mutex_t dhmutex;
-
+pthread_cond_t cond;
 struct Args{
 	unsigned int socket;
 	unsigned int* srv_snd;
@@ -31,7 +31,6 @@ struct Args{
 	unsigned char* srv_session;
 	unsigned char* clt_session;
 	EVP_PKEY* user_key;
-	EVP_PKEY* peer_key;
 	char* peer;
 	bool* pending;
 	bool* done;
@@ -144,9 +143,7 @@ int establishSessionAccepted(EVP_PKEY* user_key,unsigned char* sessionkey, unsig
 	if(!message){cerr<<" message Malloc Error";exit(1);}
 	unsigned char* temp= (unsigned char*)malloc(signedsize);
 	if(!temp){cerr<<" message Malloc Error";exit(1);}
-	cout<<buffer_size<<", signed part: "<<signedsize<<" "<<pubkey_size<<endl;
 	memcpy(temp,signed_buffer+sizeof(long)+pubkey_size+sizeof(unsigned int),signedsize);
-	cout<<*(unsigned int*)temp<<endl; 
 	int message_size= digsign_verify(peerpubkey,temp,signedsize,message);
 	if(message_size<=0){cerr<<"signature is invalid"; return -1;}
 	unsigned char* nonce=(unsigned char*) malloc(NONCE_SIZE);
@@ -207,7 +204,6 @@ void *recv_handler(void* arguments){
 	bool* doneptr=args->done;
 	bool* waiting=args->waiting;
 	EVP_PKEY* user_key=args->user_key;
-	EVP_PKEY* peer_key=args->peer_key;
 	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
 	if(!buffer){cerr<<"recv handler: buffer Malloc Error";exit(1);}
 	unsigned char* message = (unsigned char*)malloc(MAX_SIZE);
@@ -223,7 +219,9 @@ void *recv_handler(void* arguments){
 	bool done=*doneptr;
 	pthread_mutex_unlock(&mutex);
 	while(!done){
-		pthread_mutex_lock(&dhmutex);	
+		pthread_mutex_lock(&dhmutex);
+		while(*pending) { pthread_cond_wait (&cond, &dhmutex);}
+		pthread_mutex_unlock(&dhmutex);	
 		message_size=receive_message(socket,buffer);
 		pthread_mutex_lock(&mutex);	
 		if(message_size>0){
@@ -259,15 +257,19 @@ void *recv_handler(void* arguments){
 								if(ret>=0){
 									memcpy(buffer,(unsigned char*)srv_send_counter,sizeof(unsigned int));
 									memcpy(buffer+sizeof(unsigned int),aad,aadlen);
-									ret=auth_encrypt(6, buffer, aadlen+sizeof(unsigned int),message,message_size, server_sessionkey, aad);
+									ret=auth_encrypt(6, buffer, aadlen+sizeof(unsigned int),(unsigned char*)peer_username, strlen(peer_username)+1, server_sessionkey, aad);
 									if(ret>=0){
 										send_message(socket, ret, aad);
 										increment_counter(*srv_send_counter);
+										cout<<"Sent ecdhkey, press enter to start chatting."<<endl;
+										*waiting=false;
+										*chatting=true;
+										
+
 									}
 								}
 							}					
-							*chatting=true;
-							*waiting=false;
+
 							
 						}break;
 						case 4:{
@@ -285,24 +287,14 @@ void *recv_handler(void* arguments){
 								unsigned int cntr=*(unsigned int*)(aad+MSGHEADER);
 								if(cntr==*clt_recv_counter){
 									unsigned int msgsize;
-									ret= auth_decrypt(aad, aadlen, client_sessionkey, opcode, buffer, msgsize, message,false);
+									ret= auth_decrypt(aad+sizeof(unsigned int), aadlen-sizeof(unsigned int), client_sessionkey, opcode, buffer, msgsize, message,false);
+									cout<<"1"<<endl;
 									if (ret>0&&ret<MSG_MAX) {
 										increment_counter(*clt_recv_counter);	
 										printf("%s: %s \n",user,message);									
 									}
 								}								
 							}
-						}break;
-						case 6:
-						{
-							cout<<"received pubkey of: "<<message<<endl;
-							long pubkey_size=*(long*) (aad+sizeof(unsigned int));
-							BIO* bio= BIO_new(BIO_s_mem());
-							BIO_write(bio, aad+sizeof(unsigned int)+sizeof(long), pubkey_size);
-							peer_key= PEM_read_bio_PUBKEY(bio, NULL, NULL, NULL);
-							BIO_free(bio);
-							
-							
 						}break;
 						case 7:
 						{
@@ -316,7 +308,6 @@ void *recv_handler(void* arguments){
 	done=*doneptr;
 	
 	pthread_mutex_unlock(&mutex);	
-	pthread_mutex_unlock(&dhmutex);
 	}
 	
 	free(buffer);
@@ -478,6 +469,7 @@ int main(int argc, char *argv[]){
 	bool pending=false;
 	bool waiting = false;
 	EVP_PKEY* peer_key;
+	int deb=0;
 	unsigned char* client_sessionkey=(unsigned char*) malloc(EVP_MD_size(md));
 	if (!client_sessionkey) {cerr<<"MALLOC ERR";exit(1);}
 	pthread_t receiver;
@@ -497,21 +489,19 @@ int main(int argc, char *argv[]){
 	args->chatting=&chatting;
 	args->pending=&pending;
 	args->waiting=&waiting;
-	args->peer_key=peer_key;
 	printcommands();
 	if( pthread_create(&receiver, NULL, &recv_handler, (void *)args)  != 0 )
 		printf("Failed to create thread\n");
 	while(!chatting && !done){
 		getline(cin, command);
 		pthread_mutex_lock(&mutex);
-		if (!waiting){
+		if (!waiting&&!chatting){
 			if(!cin){cerr<<"cin error"; exit(1);}
-			cout<<pending<<endl;
 			if(pending){			
 				cout<<command<<endl;
 				if(command.compare("!accept")==0){
 					opcode=3;
-	 
+	 				
 					//create nonce
 					unsigned char* mynonce2=(unsigned char*)malloc(NONCE_SIZE);
 					if(!mynonce2) {cerr<<"mynonce Malloc Error";exit(1);}
@@ -540,13 +530,26 @@ int main(int argc, char *argv[]){
 					memcpy(aad, (unsigned char*) &srv_counter,  sizeof(unsigned int));
 					memcpy(aad+sizeof(unsigned int), message, message_size);
 					cout<<peer_username<<" "<<strlen(peer_username)<<endl;
-					ret=auth_encrypt(opcode, aad, message_size+sizeof(unsigned int),  (unsigned char*)peer_username, strlen(peer_username)+1, server_sessionkey, buffer);
-					cout<<ret<<endl;
+					ret=auth_encrypt(3, aad, message_size+sizeof(unsigned int),  (unsigned char*)peer_username, strlen(peer_username)+1, server_sessionkey, buffer);
 					send_message(sockfd,ret,buffer);
 					increment_counter(srv_counter);
-					cout<<"sent first my ecdh pubkey: "<<buffer<<endl;
-					
-					pthread_mutex_lock(&dhmutex);
+					cout<<"sent my ecdh pubkey "<<endl;
+					message_size=receive_message(sockfd,buffer);	
+					if(message_size>0){
+						unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
+						if(received_counter==srv_rcv_counter){
+							ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+							if(ret>= 0 && opcode==6){
+								increment_counter(srv_rcv_counter);
+								cout<<"received pubkey of: "<<message<<endl;
+								unsigned int pubkey_size=aadlen-sizeof(unsigned int);
+								BIO* pkbio= BIO_new(BIO_s_mem());
+								BIO_write(pkbio, aad+sizeof(unsigned int), pubkey_size);
+								peer_key= PEM_read_bio_PUBKEY(pkbio, NULL, NULL, NULL);
+								BIO_free(pkbio);
+							}
+						}
+					}
 					cout<<"waiting for ecdhpubkey"<<endl; 
 					//aspetta altro messaggio 6 con ecdhpubkey
 					message_size=receive_message(sockfd,buffer);
@@ -556,24 +559,25 @@ int main(int argc, char *argv[]){
 							ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
 							if(ret>=0&&opcode==6){
 								increment_counter(srv_rcv_counter);
-								
-								unsigned int s_size=*(unsigned int*)aad;
-								s_size+=sizeof(unsigned int);
+								cout<<deb++<<endl;
+								unsigned int s_size=*(unsigned int*)(aad+sizeof(unsigned int));
+								cout<<s_size<<endl;
+								s_size+=(2*sizeof(unsigned int));
+								cout<<s_size<<endl;
 								// check nonce
 								if(memcmp(aad+s_size,mynonce2,NONCE_SIZE)!=0){
 									cerr<<"nonce received is not valid!";
 									exit(1);}
 								free(mynonce2);
 								
-								message_size= digsign_verify(peer_key,aad,aadlen,buffer);
+								message_size= digsign_verify(peer_key,aad+sizeof(unsigned int),aadlen-sizeof(unsigned int),buffer);
 								if(message_size<=0){cerr<<"signature is invalid"; exit(1);}
-
+								free(peer_key);
 								//extract ecdh_peer_pubkey
 								BIO* mbio2= BIO_new(BIO_s_mem());	
 								BIO_write(mbio2, buffer+NONCE_SIZE, message_size-NONCE_SIZE);
 								EVP_PKEY* ecdh_peer_pubkey= PEM_read_bio_PUBKEY(mbio2, NULL, NULL, NULL);
 								BIO_free(mbio2);
-					
 								//genera session key
 								
 								EVP_PKEY_CTX *derive_ctx2;
@@ -596,8 +600,12 @@ int main(int argc, char *argv[]){
 							}
 						}	
 					}
-					pthread_mutex_unlock(&dhmutex);
+					pthread_mutex_lock(&dhmutex);
 					pending=false;
+					chatting=true;
+					pthread_cond_signal (&cond);
+					pthread_mutex_unlock(&dhmutex);
+					
 					
 				}
 				else if(command.compare("!refuse")==0){
@@ -607,7 +615,10 @@ int main(int argc, char *argv[]){
 					send_message(sockfd,ret,buffer);
 					increment_counter(srv_counter);
 					cout<<"mandata refuse"<<endl;
+					pthread_mutex_lock(&dhmutex);
 					pending=false;
+					pthread_cond_signal (&cond);
+					pthread_mutex_unlock(&dhmutex);
 				}else{
 					cout<<"Request to talk from: "<<peer_username<<endl;
 					cout<<"Type !accept or !refuse."<<endl;
@@ -646,6 +657,7 @@ int main(int argc, char *argv[]){
 					unsigned char* peer_name=(unsigned char*) malloc(peer.length());
 					peer.copy((char*)peer_name,peer.length());
 					peer.copy(peer_username,peer.length());
+					peer_username[peer.length()]='\0';
 					ret=auth_encrypt(opcode,(unsigned char*) &srv_counter, sizeof(unsigned int), peer_name, peer.length(), server_sessionkey, buffer);  
 					send_message(sockfd,ret,buffer);
 					increment_counter(srv_counter);
@@ -659,16 +671,24 @@ int main(int argc, char *argv[]){
 		pthread_mutex_unlock(&mutex);
 	}
 	string typed;
+	cout<<"Chatting with "<<peer_username<<endl;
 	while(chatting && !done){
-		pthread_mutex_lock(&mutex);
-		cout<<"you: ";
+		
 		getline(cin, typed);
+		pthread_mutex_lock(&mutex);
 		if (typed.length()>MSG_MAX) 
 			cerr<<"message too long."<<endl;
 		else{	
+			opcode=5;			
+			if(typed.compare("!quit")==0){
+				opcode=0
+			}
 			typed.copy((char*)aad,typed.length());
+			aad[typed.length()]='\0'
 			message_size=auth_encrypt(5,(unsigned char*) &clt_counter,sizeof(unsigned int),aad,typed.length(),client_sessionkey,message,false);
-			ret=auth_encrypt(5,(unsigned char*) &srv_counter,sizeof(unsigned int),message,message_size,server_sessionkey,buffer);
+			memcpy(aad,(unsigned char*) &srv_counter,sizeof(unsigned int));
+			memcpy(aad+sizeof(unsigned int),message,message_size);
+			ret=auth_encrypt(opcode,aad,message_size+sizeof(unsigned int),(unsigned char*)peer_username, strlen(peer_username)+1 ,server_sessionkey,buffer);
 			send_message(sockfd,ret,buffer);					
 			increment_counter(srv_counter);
 			

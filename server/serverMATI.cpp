@@ -113,14 +113,13 @@ void *outputqueue_handler(void* arguments){
 				memcpy(aad+sizeof(unsigned int),message.msg,message.msgsize);
 				ret=auth_encrypt(message.opcode, aad, message.msgsize+sizeof(unsigned int), (unsigned char*)message.source,strlen(message.source)+1,sessionkey,buffer);
 				if (ret>=0){
+									if(message.opcode == 6){
+				}
 					send_message(socket,ret,buffer);
 					increment_counter(myuser->send_counter);
 				}
 				if(message.opcode == 4){
 					myuser->online=true;
-				}
-				if(message.opcode == 6){
-					cout<<"forward ecdhpubkey rttsender->accepter"
 				}
 				else if (message.opcode == 2){
 					myuser->online=false;
@@ -293,17 +292,13 @@ void *client_handler(void* arguments) {
 		message_size=receive_message(socket,buffer);
 		pthread_mutex_lock(&mutex);
 		if(message_size>0){
-			cout<<"received mex"<<endl;
+			cout<<"received mex"<<*(short*)buffer<<endl;
 			unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
 			
-			cout <<received_counter<<" " <<myuser->recv_counter<<endl;
 			if(received_counter==myuser->recv_counter){
 				ret=auth_decrypt(buffer, message_size, sessionkey,opcode, aad, aadlen, message);
 				increment_counter(myuser->recv_counter);
 				
-				for(list<User>::iterator it =userlist.begin(); it != userlist.end();it++){
-					cout<<it->nickname<<" "<<it->online <<endl;										
-				}
 						
 				switch(opcode){
 					case 0:
@@ -441,7 +436,8 @@ void *client_handler(void* arguments) {
 					}break;
 					case 6:
 					{
-							if(!myuser->paired){
+							
+								myuser->paired=true;								
 								Packet mex;					
 								strncpy(mex.source,myuser->nickname,USERNAME_SIZE);
 								memcpy(mex.dest,message,USERNAME_SIZE);
@@ -449,9 +445,10 @@ void *client_handler(void* arguments) {
 								mex.msg=(unsigned char*) malloc(mex.msgsize);
 								if(!mex.msg){cerr<<"msg malloc error"; exit(1);}
 								memcpy(mex.msg,aad+sizeof(unsigned int), mex.msgsize);
-								mex.opcode=opcode;
+								mex.opcode=6;
 								myuser->inputqueue.push(mex);
-							}
+								
+		
 					}break;
 				}
 			}
@@ -535,6 +532,7 @@ int main(int argc, char *argv[]){
 			it->inputqueue.pop();
 			for(list<User>::iterator it2=userlist.begin(); it2 != userlist.end();it2++){
 				if(strcmp(message.dest, it2->nickname) == 0){
+					cout<<message.source<<"-->"<<message.dest<<" "<<message.opcode<<endl;
 					it2->outputqueue.push(message);
 				}
 			}
