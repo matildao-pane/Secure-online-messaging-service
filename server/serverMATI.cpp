@@ -106,25 +106,27 @@ void *outputqueue_handler(void* arguments){
 		pthread_mutex_lock(&mutex);
 		if(!(myuser->outputqueue.empty())){
 			Packet message = myuser->outputqueue.front();
-			if(message.msgsize<=MSG_MAX)
-			{
+			cout<<"!!!!!!!!1111opcode : "<<message.opcode<<endl;
+			
+			if(message.msgsize<=MSG_MAX){			
 				myuser->outputqueue.pop();
 				memcpy(aad,(unsigned char*)&myuser->send_counter,sizeof(unsigned int));
 				memcpy(aad+sizeof(unsigned int),message.msg,message.msgsize);
 				ret=auth_encrypt(message.opcode, aad, message.msgsize+sizeof(unsigned int), (unsigned char*)message.source,strlen(message.source)+1,sessionkey,buffer);
 				if (ret>=0){
-									if(message.opcode == 6){
-				}
 					send_message(socket,ret,buffer);
 					increment_counter(myuser->send_counter);
 				}
-				if(message.opcode == 4){
+				if(message.opcode == 0){
+					cout<<"opcode 0  "<<endl;
+					myuser->done=true;
+				}
+				else if(message.opcode == 4){
 					myuser->online=true;
 				}
 				else if (message.opcode == 2){
 					myuser->online=false;
 				}
-
 			}
 		}
 		done=myuser->done;
@@ -301,7 +303,7 @@ void *client_handler(void* arguments) {
 				
 						
 				switch(opcode){
-					case 0:
+					case 0://quit
 					{					
 						myuser->online=false;
 						if(myuser->paired){
@@ -311,6 +313,14 @@ void *client_handler(void* arguments) {
 							end.msgsize=0;
 							end.opcode=opcode;
 							myuser->inputqueue.push(end);
+							cout<<"peer: "<<myuser->peer_nickname<<endl;
+						
+							message_size=auth_encrypt(0,(unsigned char*)&myuser->send_counter, sizeof(unsigned int), (unsigned char*)myuser->nickname, strlen(myuser->nickname) , sessionkey, buffer); //send peer_pubkey 
+							if (message_size>=0)
+									{	
+										send_message(socket,message_size,buffer);
+										increment_counter(myuser->send_counter);
+									}
 						}
 						cout<<myuser->nickname<<" has exited."<<endl;
 						myuser->done=true;						
@@ -336,7 +346,7 @@ void *client_handler(void* arguments) {
 									cout<<"forwarded rtt"<<endl;
 								}										
 							}
-							if(!found){
+							if(!found||strcmp(rtt.source,rtt.dest)==0){
 								strncpy(rtt.dest ,myuser->nickname,USERNAME_SIZE);
 								rtt.opcode = 7;	
 								myuser->online=true;
@@ -436,18 +446,18 @@ void *client_handler(void* arguments) {
 					}break;
 					case 6:
 					{
-							
+								
 								myuser->paired=true;								
 								Packet mex;					
 								strncpy(mex.source,myuser->nickname,USERNAME_SIZE);
+								memcpy(myuser->peer_nickname,message,USERNAME_SIZE);
 								memcpy(mex.dest,message,USERNAME_SIZE);
 								mex.msgsize=aadlen-sizeof(unsigned int);
 								mex.msg=(unsigned char*) malloc(mex.msgsize);
 								if(!mex.msg){cerr<<"msg malloc error"; exit(1);}
 								memcpy(mex.msg,aad+sizeof(unsigned int), mex.msgsize);
 								mex.opcode=6;
-								myuser->inputqueue.push(mex);
-								
+								myuser->inputqueue.push(mex);								
 		
 					}break;
 				}
@@ -530,6 +540,7 @@ int main(int argc, char *argv[]){
 		while(!(it->inputqueue.empty())){
 			Packet message = it->inputqueue.front();
 			it->inputqueue.pop();
+			
 			for(list<User>::iterator it2=userlist.begin(); it2 != userlist.end();it2++){
 				if(strcmp(message.dest, it2->nickname) == 0){
 					cout<<message.source<<"-->"<<message.dest<<" "<<message.opcode<<endl;

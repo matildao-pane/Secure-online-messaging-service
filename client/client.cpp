@@ -227,14 +227,23 @@ void *recv_handler(void* arguments){
 		if(message_size>0){
 			unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
 			if(received_counter==*srv_recv_counter){
+				 
+				//////NOI
+				memset(message, 0, message_size);
+				////////////
 				ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
+	
 				if(ret>=0){
 					increment_counter(*srv_recv_counter);
 					
 					switch(opcode){
 						case 0:
 						{				
+							cout<<"received quit mex"<<endl;
 							*doneptr=true;
+							if(memcmp(message,peer_username, strlen(peer_username))==0){
+								cout<<"Partner quit the chat.  "<<endl;
+							}
 						}break;
 						case 1:
 						{
@@ -264,13 +273,9 @@ void *recv_handler(void* arguments){
 										cout<<"Sent ecdhkey, press enter to start chatting."<<endl;
 										*waiting=false;
 										*chatting=true;
-										
-
 									}
 								}
 							}					
-
-							
 						}break;
 						case 4:{
 							if(*waiting&&memcmp(message, peer_username,ret-1)==0){
@@ -284,11 +289,13 @@ void *recv_handler(void* arguments){
 							if(*chatting){
 								char user[USERNAME_SIZE];
 								memcpy(user,message,USERNAME_SIZE);					
-								unsigned int cntr=*(unsigned int*)(aad+MSGHEADER);
+								unsigned int cntr=*(unsigned int*)(aad+MSGHEADER-sizeof(short)+sizeof(unsigned int));
+								cout<<"cntr: "<<cntr<<" clt recv counter: "<<*clt_recv_counter<<endl;
 								if(cntr==*clt_recv_counter){
 									unsigned int msgsize;
+									memset(message, 0, message_size);  
 									ret= auth_decrypt(aad+sizeof(unsigned int), aadlen-sizeof(unsigned int), client_sessionkey, opcode, buffer, msgsize, message,false);
-									cout<<"1"<<endl;
+							
 									if (ret>0&&ret<MSG_MAX) {
 										increment_counter(*clt_recv_counter);	
 										printf("%s: %s \n",user,message);									
@@ -469,7 +476,6 @@ int main(int argc, char *argv[]){
 	bool pending=false;
 	bool waiting = false;
 	EVP_PKEY* peer_key;
-	int deb=0;
 	unsigned char* client_sessionkey=(unsigned char*) malloc(EVP_MD_size(md));
 	if (!client_sessionkey) {cerr<<"MALLOC ERR";exit(1);}
 	pthread_t receiver;
@@ -498,7 +504,6 @@ int main(int argc, char *argv[]){
 		if (!waiting&&!chatting){
 			if(!cin){cerr<<"cin error"; exit(1);}
 			if(pending){			
-				cout<<command<<endl;
 				if(command.compare("!accept")==0){
 					opcode=3;
 	 				
@@ -558,12 +563,9 @@ int main(int argc, char *argv[]){
 						if(received_counter==srv_rcv_counter){
 							ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
 							if(ret>=0&&opcode==6){
-								increment_counter(srv_rcv_counter);
-								cout<<deb++<<endl;
-								unsigned int s_size=*(unsigned int*)(aad+sizeof(unsigned int));
-								cout<<s_size<<endl;
+								increment_counter(srv_rcv_counter);							
+								unsigned int s_size=*(unsigned int*)(aad+sizeof(unsigned int));			 
 								s_size+=(2*sizeof(unsigned int));
-								cout<<s_size<<endl;
 								// check nonce
 								if(memcmp(aad+s_size,mynonce2,NONCE_SIZE)!=0){
 									cerr<<"nonce received is not valid!";
@@ -609,12 +611,10 @@ int main(int argc, char *argv[]){
 					
 				}
 				else if(command.compare("!refuse")==0){
-					cout<<"ho rifiutato"<<endl;
 					opcode=4;
 					ret=auth_encrypt(opcode,(unsigned char*) &srv_counter, sizeof(unsigned int), (unsigned char*)peer_username, strlen(peer_username)+1 , server_sessionkey, buffer);
 					send_message(sockfd,ret,buffer);
 					increment_counter(srv_counter);
-					cout<<"mandata refuse"<<endl;
 					pthread_mutex_lock(&dhmutex);
 					pending=false;
 					pthread_cond_signal (&cond);
@@ -642,15 +642,13 @@ int main(int argc, char *argv[]){
 				ret=auth_encrypt(opcode,(unsigned char*) &srv_counter, sizeof(unsigned int), (unsigned char*)username, strlen(username)+1 , server_sessionkey, buffer);
 				send_message(sockfd,ret,buffer);
 				increment_counter(srv_counter);
-			
-				cout<<"sent list request "<<endl;
+
 			}
 			else if(command.compare(0,9,"!request ")==0){
 				string peer=command.substr(9,command.length());			
 				if(peer.length()>=USERNAME_SIZE)
 					cout<<"Invalid username."<<endl;
 				else{
-					cout<<"Requested "<<peer<<endl;
 					opcode=2;
 					//send  RTT
 					waiting=true;
@@ -681,23 +679,26 @@ int main(int argc, char *argv[]){
 		else{	
 			opcode=5;			
 			if(typed.compare("!quit")==0){
-				opcode=0
+				opcode=0;
+				done=true;
 			}
 			typed.copy((char*)aad,typed.length());
-			aad[typed.length()]='\0'
+			aad[typed.length()]='\0';
 			message_size=auth_encrypt(5,(unsigned char*) &clt_counter,sizeof(unsigned int),aad,typed.length(),client_sessionkey,message,false);
 			memcpy(aad,(unsigned char*) &srv_counter,sizeof(unsigned int));
 			memcpy(aad+sizeof(unsigned int),message,message_size);
 			ret=auth_encrypt(opcode,aad,message_size+sizeof(unsigned int),(unsigned char*)peer_username, strlen(peer_username)+1 ,server_sessionkey,buffer);
 			send_message(sockfd,ret,buffer);					
 			increment_counter(srv_counter);
-			
+
+			increment_counter(clt_counter);
+
 		}
 		pthread_mutex_unlock(&mutex);
 	}
 	pthread_join(receiver,NULL);
 ////////
-	cout<<"FINE"<<endl;
+	cout<<"Closedprogram"<<endl;
 	free(server_sessionkey);
 	free(client_sessionkey);
 	free(buffer);
