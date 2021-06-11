@@ -61,7 +61,7 @@ Sequence diagram to request the user list:
 
 Sequence diagram to send an RTT, accept it or refuse it, then starting the comunication with the other user:
 
-![flow_Op234](/Documentation/opcode234.png)
+![flow_Op234](/Documentation/Flow2.png)
 
 #### OPCODE **0** QUIT:
 
