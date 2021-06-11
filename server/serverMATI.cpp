@@ -20,7 +20,7 @@
 
 using namespace std;
 pthread_mutex_t mutex;
-
+pthread_mutex_t list_mutex;
 void error(const char *msg){
     perror(msg);
     exit(1);
@@ -93,8 +93,8 @@ void *outputqueue_handler(void* arguments){
 	Args *args = (Args*) arguments;
 	int socket= args->socket;
 	User* myuser= args->arguser;
-	int ret;
 	unsigned char* sessionkey=args->sessionkey;
+	int ret;
 	unsigned char* buffer = (unsigned char*)malloc(MAX_SIZE);
 	if(!buffer){cerr<<"outputqueue handler: buffer Malloc Error";exit(1);}
 	unsigned char* aad = (unsigned char*)malloc(MAX_SIZE);
@@ -106,7 +106,6 @@ void *outputqueue_handler(void* arguments){
 		pthread_mutex_lock(&mutex);
 		if(!(myuser->outputqueue.empty())){
 			Packet message = myuser->outputqueue.front();
-			cout<<"!!!!!!!!1111opcode : "<<message.opcode<<endl;
 			
 			if(message.msgsize<=MSG_MAX){			
 				myuser->outputqueue.pop();
@@ -118,7 +117,6 @@ void *outputqueue_handler(void* arguments){
 					increment_counter(myuser->send_counter);
 				}
 				if(message.opcode == 0){
-					cout<<"opcode 0  "<<endl;
 					myuser->done=true;
 				}
 				else if(message.opcode == 4){
@@ -132,8 +130,11 @@ void *outputqueue_handler(void* arguments){
 		done=myuser->done;
 		pthread_mutex_unlock(&mutex);
 	}
-	cout<<myuser->nickname<<"queue thread done."<<endl;	
+	free(buffer);
+	free(aad);
+	cout<<myuser->nickname<<": queue thread done."<<endl;	
 	pthread_exit(NULL);
+	return NULL;
 }
 
 
@@ -293,8 +294,7 @@ void *client_handler(void* arguments) {
 	while(!done){	
 		message_size=receive_message(socket,buffer);
 		pthread_mutex_lock(&mutex);
-		if(message_size>0){
-			cout<<"received mex"<<*(short*)buffer<<endl;
+		if(message_size>0&&!myuser->done){
 			unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
 			
 			if(received_counter==myuser->recv_counter){
@@ -313,7 +313,6 @@ void *client_handler(void* arguments) {
 							end.msgsize=0;
 							end.opcode=opcode;
 							myuser->inputqueue.push(end);
-							cout<<"peer: "<<myuser->peer_nickname<<endl;
 						
 							message_size=auth_encrypt(0,(unsigned char*)&myuser->send_counter, sizeof(unsigned int), (unsigned char*)myuser->nickname, strlen(myuser->nickname) , sessionkey, buffer); //send peer_pubkey 
 							if (message_size>=0)
@@ -468,13 +467,11 @@ void *client_handler(void* arguments) {
 	}
 	pthread_join(outputmanager,NULL);
 	EVP_PKEY_free(client_pubkey);
-	free(sessionkey);
 	free(buffer);
 	free(aad);
 	free(message);
 	close(socket);
-	cout<<myuser->nickname<<" thread done."<<endl;
-	myuser->done=true;	
+	cout<<myuser->nickname<<": thread done."<<endl;	
 	pthread_exit(NULL);
 	return NULL;
 }
@@ -517,27 +514,28 @@ int main(int argc, char *argv[]){
 		if (newsocksocket < 0){ 
 			if (errno != EAGAIN || errno != EWOULDBLOCK)	error("ERROR on accept");
 		}
-		else{
+		else{	
+			pthread_mutex_lock(&list_mutex);
 			User u;
-			pthread_mutex_lock(&mutex);
 			userlist.push_back(u);
 			Args *args=(Args *)malloc(sizeof(struct Args));
 
 			args->socket=newsocksocket;
-
 			args->arguser=&userlist.back();
 			pthread_t thread;
 			threadlist.push_back(thread);
-			pthread_mutex_unlock(&mutex);
 			if( pthread_create(&threadlist.back(), NULL, &client_handler, (void *)args)  != 0 )
 			printf("Failed to create thread\n");
+			pthread_mutex_unlock(&list_mutex);
 		}
 	}
-	pthread_mutex_lock(&mutex);
-	int i=0;	
+
+	int i=0;
+	pthread_mutex_lock(&list_mutex);	
 	for(list<User>::iterator it=userlist.begin(); it != userlist.end();it++){
-		//Check for messages in input queues and move them to dest outputqueue.				
-		while(!(it->inputqueue.empty())){
+		//Check for messages in input queues and move them to dest outputqueue.
+		pthread_mutex_lock(&mutex);				
+		while(!(it->inputqueue.empty())){	
 			Packet message = it->inputqueue.front();
 			it->inputqueue.pop();
 			
@@ -548,17 +546,26 @@ int main(int argc, char *argv[]){
 				}
 			}
 		}
-		//
-		if(it->done){
+		bool itdone=it->done;
+		pthread_mutex_unlock(&mutex);	
+		if(itdone){
 			list<pthread_t>::iterator t=threadlist.begin();
 			advance(t,i);
 			pthread_join(*t,NULL);
+			cout<<it->nickname<<": deleting."<<endl;
 			it=userlist.erase(it);
+			i++;
+			if(it==userlist.end())
+			{
+				it=userlist.begin();
+				i=0;
+			}
 			
 		}
 		i++;
 	}
-	pthread_mutex_unlock(&mutex); 
+	pthread_mutex_unlock(&list_mutex);
+	
     }	
 	return 0; 
 }

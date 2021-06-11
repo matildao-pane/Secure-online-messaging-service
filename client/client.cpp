@@ -46,6 +46,7 @@ void error(const char *msg)
 
 void printcommands()
 {
+	cout<<"--------------------------------------------------"<<endl;
 	cout<<"Available Features:"<<endl;
 	cout<<"!quit: exit program"<<endl;
 	cout<<"!help: print this list"<<endl;
@@ -120,6 +121,7 @@ EVP_PKEY* verify_server_certificate( unsigned char* buffer, long buffer_size ){
 }
 
 void  print_users_list(unsigned char* buffer, unsigned int buffer_size){
+	cout<<"--------------------------------------------------"<<endl;
 	cout<<"Online Users: "<<endl;
 	unsigned int read=0;
 	char nickname[USERNAME_SIZE];
@@ -239,10 +241,11 @@ void *recv_handler(void* arguments){
 					switch(opcode){
 						case 0:
 						{				
-							cout<<"received quit mex"<<endl;
 							*doneptr=true;
-							if(memcmp(message,peer_username, strlen(peer_username))==0){
-								cout<<"Partner quit the chat.  "<<endl;
+							if(memcmp(message,peer_username,ret-1)==0){
+								
+								cout<<peer_username<<" has gone offline."<<endl;
+								cout<<"Press enter to exit."<<endl;
 							}
 						}break;
 						case 1:
@@ -270,7 +273,7 @@ void *recv_handler(void* arguments){
 									if(ret>=0){
 										send_message(socket, ret, aad);
 										increment_counter(*srv_send_counter);
-										cout<<"Sent ecdhkey, press enter to start chatting."<<endl;
+										cout<<"Press enter to start sending."<<endl;
 										*waiting=false;
 										*chatting=true;
 									}
@@ -290,7 +293,6 @@ void *recv_handler(void* arguments){
 								char user[USERNAME_SIZE];
 								memcpy(user,message,USERNAME_SIZE);					
 								unsigned int cntr=*(unsigned int*)(aad+MSGHEADER-sizeof(short)+sizeof(unsigned int));
-								cout<<"cntr: "<<cntr<<" clt recv counter: "<<*clt_recv_counter<<endl;
 								if(cntr==*clt_recv_counter){
 									unsigned int msgsize;
 									memset(message, 0, message_size);  
@@ -305,7 +307,7 @@ void *recv_handler(void* arguments){
 						}break;
 						case 7:
 						{
-								cout<< "user not found" <<endl;
+								cout<< "User not found." <<endl;
 								*waiting=false;
 						}break;
 					}
@@ -546,7 +548,6 @@ int main(int argc, char *argv[]){
 							ret= auth_decrypt(buffer, message_size, server_sessionkey,opcode, aad, aadlen, message);
 							if(ret>= 0 && opcode==6){
 								increment_counter(srv_rcv_counter);
-								cout<<"received pubkey of: "<<message<<endl;
 								unsigned int pubkey_size=aadlen-sizeof(unsigned int);
 								BIO* pkbio= BIO_new(BIO_s_mem());
 								BIO_write(pkbio, aad+sizeof(unsigned int), pubkey_size);
@@ -555,7 +556,6 @@ int main(int argc, char *argv[]){
 							}
 						}
 					}
-					cout<<"waiting for ecdhpubkey"<<endl; 
 					//aspetta altro messaggio 6 con ecdhpubkey
 					message_size=receive_message(sockfd,buffer);
 					if(message_size>0){
@@ -619,6 +619,7 @@ int main(int argc, char *argv[]){
 					pending=false;
 					pthread_cond_signal (&cond);
 					pthread_mutex_unlock(&dhmutex);
+					printcommands();
 				}else{
 					cout<<"Request to talk from: "<<peer_username<<endl;
 					cout<<"Type !accept or !refuse."<<endl;
@@ -647,7 +648,7 @@ int main(int argc, char *argv[]){
 			else if(command.compare(0,9,"!request ")==0){
 				string peer=command.substr(9,command.length());			
 				if(peer.length()>=USERNAME_SIZE)
-					cout<<"Invalid username."<<endl;
+					cerr<<"Invalid username."<<endl;
 				else{
 					opcode=2;
 					//send  RTT
@@ -669,7 +670,8 @@ int main(int argc, char *argv[]){
 		pthread_mutex_unlock(&mutex);
 	}
 	string typed;
-	cout<<"Chatting with "<<peer_username<<endl;
+	if(!done)
+		cout<<"Chatting with "<<peer_username<<endl;
 	while(chatting && !done){
 		
 		getline(cin, typed);
@@ -698,7 +700,8 @@ int main(int argc, char *argv[]){
 	}
 	pthread_join(receiver,NULL);
 ////////
-	cout<<"Closedprogram"<<endl;
+	cout<<"Exited."<<endl;
+	close(sockfd);
 	free(server_sessionkey);
 	free(client_sessionkey);
 	free(buffer);
