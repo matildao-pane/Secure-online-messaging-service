@@ -380,7 +380,7 @@ void *client_handler(void* arguments) {
 							BIO_free(mybio);					 
 							key.opcode=opcode;		
 							string fname = "pubkeys/"+(string)peerusername+".pem";
-							//Get user pubkey						
+							//Get peer pubkey						
 							FILE* file2 = fopen( fname.c_str(), "r");
 							if(!file2) {
 								cerr<<"Accept: Incorrect peer Username";
@@ -404,7 +404,9 @@ void *client_handler(void* arguments) {
 								free(newaad);
 								if (message_size>=0)
 									{	
+										// send to peer the user pubkey and ecdhpubkey
 										myuser->inputqueue.push(key);
+										// send back to myuser the peerpubk key
 										send_message(socket,message_size,buffer);
 										cout<<"sent pubkey of: "<<peerusername<<endl;
 										increment_counter(myuser->send_counter);
