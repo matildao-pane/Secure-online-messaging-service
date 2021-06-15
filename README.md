@@ -25,7 +25,7 @@ OPCODE# | Name | Meaning
 3 | ACCEPT | the user receives an RTT and accept it
 4 | REFUSE | the user refuses to talk with the user who sent the RTT
 5 | MESSAGE | the messages with this opcode are the messages exchanged during the chat
-6 | SEND_ECDHKEY | send ECDH_PUB_KEY to user who accepted the chat request
+6 | CC_SESSION_ESTABLISHMENT | send ECDH_PUB_KEY and PUB_KEY to user who accepted the chat request
 7 | USER_NOT_FOUND | request to unavailable or unknown client
 
 ### Authentication phase:
@@ -84,11 +84,11 @@ Sequence diagram to send an RTT, accept it or refuse it, then starting the comun
 
 ![opcode4](/Documentation/OPCODE4.png)
 
-#### OPCODE **5** :
+#### OPCODE **5** MESSAGE:
 
 ![opcode5](/Documentation/OPCODE5.png)
 
-#### OPCODE **6** :
+#### OPCODE **6** CC_SESSION_ESTABLISHMENT:
 
 ![opcode6](/Documentation/OPCODE6.png)
 
