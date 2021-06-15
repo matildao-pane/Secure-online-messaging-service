@@ -92,6 +92,17 @@ Sequence diagram to send an RTT, accept it or refuse it, then starting the comun
 
 ![opcode6](/Documentation/OPCODE6.png)
 
+## Implementation choices
+
+After the connection establishment with the server, the list of the available users and each recipient or sender usernames are encrypted to address privacy concerns of the users.
+
+The opcodes are authenticated to verify the user intentions, but it's not necessary to encrypt the operation type. 
+
+Also the counters are authenticated because we need to verify that the message source is the one we are expecting, but it's not considered a sensitive data.
+
+Being public the keys are not encrypted, but only authenticated.
+
+The messages exchanged between two clients are always encrypted.
 
 ## Run it
 To run this project:
