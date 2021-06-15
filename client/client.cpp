@@ -536,11 +536,10 @@ int main(int argc, char *argv[]){
 					message_size=digsign_sign(user_key, buffer, NONCE_SIZE+keysize , message);
 					memcpy(aad, (unsigned char*) &srv_counter,  sizeof(unsigned int));
 					memcpy(aad+sizeof(unsigned int), message, message_size);
-					cout<<peer_username<<" "<<strlen(peer_username)<<endl;
 					ret=auth_encrypt(3, aad, message_size+sizeof(unsigned int),  (unsigned char*)peer_username, strlen(peer_username)+1, server_sessionkey, buffer);
 					send_message(sockfd,ret,buffer);
 					increment_counter(srv_counter);
-					cout<<"sent my ecdh pubkey "<<endl;
+					
 					message_size=receive_message(sockfd,buffer);	
 					if(message_size>0){
 						unsigned int received_counter=*(unsigned int*)(buffer+MSGHEADER);
