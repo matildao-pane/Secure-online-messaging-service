@@ -674,10 +674,11 @@ int main(int argc, char *argv[]){
 	while(chatting && !done){
 		
 		getline(cin, typed);
+		
 		pthread_mutex_lock(&mutex);
 		if (typed.length()>MSG_MAX) 
 			cerr<<"message too long."<<endl;
-		else{	
+		else if (typed.length()>0){	
 			opcode=5;			
 			if(typed.compare("!quit")==0){
 				opcode=0;
