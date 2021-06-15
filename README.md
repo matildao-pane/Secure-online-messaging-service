@@ -65,29 +65,32 @@ Sequence diagram to send an RTT, accept it or refuse it, then starting the comun
 
 #### OPCODE **0** QUIT:
 
+![opcode1_LIST](/Documentation/OPCODE0.png)
  
 
 #### OPCODE **1** LIST:
 
- ![opcode1_LIST](/Documentation/opcode1_LIST.png)
+![opcode1_LIST](/Documentation/opcode1_LIST.png)
 
 #### OPCODE **2** RTT:
 
 ![opcode2_RTT](/Documentation/opcode2_RTT.png)
 
-
 #### OPCODE **3** ACCEPT:  
 
- ![opcode3_ACCEPT](/Documentation/opcode3_ACCEPT.png)
- 
+![opcode3_ACCEPT](/Documentation/opcode3_ACCEPT.png)
 
 #### OPCODE **4** REFUSE:
 
+![opcode4](/Documentation/OPCODE4.png)
 
-#### OPCODE **5** STANDARD:
+#### OPCODE **5** :
 
-![opcode5](/Documentation/opcode5.png)
+![opcode5](/Documentation/OPCODE5.png)
 
+#### OPCODE **6** :
+
+![opcode6](/Documentation/OPCODE6.png)
 
 
 ## Run it
