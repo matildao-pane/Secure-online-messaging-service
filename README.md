@@ -27,6 +27,7 @@ OPCODE# | Name | Meaning
 5 | MESSAGE | the messages with this opcode are the messages exchanged during the chat
 6 | CC_SESSION_ESTABLISHMENT | send ECDH_PUB_KEY and PUB_KEY to user who accepted the chat request
 7 | USER_NOT_FOUND | request to unavailable or unknown client
+8 | NOTIFY | the peer closed the chat
 
 ### Authentication phase:
 
