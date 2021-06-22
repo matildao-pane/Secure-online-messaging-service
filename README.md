@@ -81,7 +81,7 @@ Sequence diagram to send an RTT, accept it or refuse it, then starting the comun
 
 #### OPCODE **3** ACCEPT:  
 
-![opcode3_ACCEPT](/Documentation/opcode3_ACCEPT.png)
+![opcode3_ACCEPT](/Documentation/OPCODE3_ACCEPT.png)
 
 #### OPCODE **4** REFUSE:
 
