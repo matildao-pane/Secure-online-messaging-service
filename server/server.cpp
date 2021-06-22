@@ -116,8 +116,9 @@ void *outputqueue_handler(void* arguments){
 					send_message(socket,ret,buffer);
 					increment_counter(myuser->send_counter);
 				}
-				if(message.opcode == 0){
-					myuser->done=true;
+				if(message.opcode == 8){
+					myuser->online=true;
+					myuser->paired=false;
 				}
 				else if(message.opcode == 4){
 					myuser->online=true;
@@ -306,21 +307,6 @@ void *client_handler(void* arguments) {
 					case 0://quit
 					{					
 						myuser->online=false;
-						if(myuser->paired){
-							Packet end;					
-							strncpy(end.source,myuser->nickname,USERNAME_SIZE);
-							strncpy(end.dest,myuser->peer_nickname,USERNAME_SIZE);
-							end.msgsize=0;
-							end.opcode=opcode;
-							myuser->inputqueue.push(end);
-						
-							message_size=auth_encrypt(0,(unsigned char*)&myuser->send_counter, sizeof(unsigned int), (unsigned char*)myuser->nickname, strlen(myuser->nickname) , sessionkey, buffer); //send peer_pubkey 
-							if (message_size>=0)
-									{	
-										send_message(socket,message_size,buffer);
-										increment_counter(myuser->send_counter);
-									}
-						}
 						cout<<myuser->nickname<<" has exited."<<endl;
 						myuser->done=true;						
 					}break;
@@ -336,7 +322,10 @@ void *client_handler(void* arguments) {
 							strncpy(rtt.source,myuser->nickname,USERNAME_SIZE);
 							memcpy(rtt.dest,message,ret);
 							rtt.dest[ret]='\0';
-							rtt.msgsize=0;
+							rtt.msg=(unsigned char*) malloc(NONCE_SIZE);
+							if(!rtt.msg){cerr<<"msg malloc error"; exit(1);}
+							memcpy(rtt.msg,aad+sizeof(unsigned int),NONCE_SIZE);
+							rtt.msgsize=NONCE_SIZE;
 							for(list<User>::iterator it =userlist.begin(); it != userlist.end();it++){
 								if(strncmp(it->nickname,rtt.dest,strlen(rtt.dest))==0 && it->online){
 									found=true;
@@ -460,6 +449,25 @@ void *client_handler(void* arguments) {
 								mex.opcode=6;
 								myuser->inputqueue.push(mex);								
 		
+					}break;
+					case 8:
+					{
+						if(myuser->paired){
+							Packet end;					
+							strncpy(end.source,myuser->nickname,USERNAME_SIZE);
+							strncpy(end.dest,myuser->peer_nickname,USERNAME_SIZE);
+							end.msgsize=0;
+							end.opcode=opcode;
+							myuser->inputqueue.push(end);
+							message_size=auth_encrypt(8,(unsigned char*)&myuser->send_counter, sizeof(unsigned int), (unsigned char*)myuser->nickname, strlen(myuser->nickname) , sessionkey, buffer);
+							if (message_size>=0)
+								{	
+									send_message(socket,message_size,buffer);
+									increment_counter(myuser->send_counter);
+								}
+							myuser->paired=false;
+							myuser->online=true;
+						}
 					}break;
 				}
 			}
