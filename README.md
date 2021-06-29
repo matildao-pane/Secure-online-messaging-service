@@ -2,7 +2,7 @@
 # Secure-online-messaging-service
 Group project for the Foundations of Cybersecurity course of the Artificial Intelligence and Data Engineering Msc at University of Pisa
 
-### Project by @GSilvestri92 @matildao-pane @ragnar1002
+### Project by Lorenzo Barigliano, Matilde Mazzini, Giulio Silvestri
 
 ## Introduction
 This is a secure client server application: the messages exchanged are signed and encrypted using the OpenSSL library.
